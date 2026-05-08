@@ -30,9 +30,10 @@ final class BLEManager: NSObject, ObservableObject {
     @Published var sensorPackets    : [SensorPacket] = []
 
     // MARK: - CoreBluetooth
-    private var centralManager  : CBCentralManager!
-    private var whoopPeripheral : CBPeripheral?
-    private var pingTimer       : Timer?
+    private var centralManager    : CBCentralManager!
+    private var whoopPeripheral   : CBPeripheral?
+    private var cmdCharacteristic : CBCharacteristic?
+    private var pingTimer         : Timer?
 
     // MARK: - Networking
     private let network = NetworkManager()
@@ -81,6 +82,23 @@ final class BLEManager: NSObject, ObservableObject {
     func disconnect() {
         guard let p = whoopPeripheral else { return }
         centralManager.cancelPeripheralConnection(p)
+    }
+
+    func triggerHistoricalSync() {
+        guard let p = whoopPeripheral, let char = cmdCharacteristic else {
+            appendLog(.system, "Cannot sync: Not connected or CMD characteristic missing.")
+            return
+        }
+        
+        // Placeholder command for historical sync
+        let hex = "03040000"
+        let triggerData = Data(stride(from: 0, to: hex.count, by: 2).compactMap {
+            UInt8(hex[hex.index(hex.startIndex, offsetBy: $0) ...
+                     hex.index(hex.startIndex, offsetBy: $0 + 1)], radix: 16)
+        })
+        
+        p.writeValue(triggerData, for: char, type: .withoutResponse)
+        appendLog(.system, "Sent historical sync command [\(hex)]")
     }
 
     // MARK: - Helpers
@@ -154,7 +172,8 @@ extension BLEManager: CBCentralManagerDelegate {
     func centralManager(_ central: CBCentralManager,
                         didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
         connectionStatus = "Disconnected"
-        whoopPeripheral  = nil
+        whoopPeripheral   = nil
+        cmdCharacteristic = nil
         heartRate        = nil
         backendHR        = nil
         
@@ -190,6 +209,7 @@ extension BLEManager: CBPeripheralDelegate {
             }
             // Send "Start Activity" trigger to unlock the high-frequency sensor stream
             if char.uuid == kCmdToStrap {
+                cmdCharacteristic = char
                 let hex = "aa0800a8238c03017d5ec627"
                 let triggerData = Data(stride(from: 0, to: hex.count, by: 2).compactMap {
                     UInt8(hex[hex.index(hex.startIndex, offsetBy: $0) ...
@@ -225,9 +245,20 @@ extension BLEManager: CBPeripheralDelegate {
             }
 
         case kWhoopEvents:
-            // EVENTS_FROM_STRAP — low-frequency; log to UI only, do not forward
+            // EVENTS_FROM_STRAP — low-frequency event + battery broadcast
             let evtHex = data.map { String(format: "%02X", $0) }.joined(separator: " ")
             appendLog(.data, "\(characteristic.uuid.uuidString)  →  \(evtHex)")
+
+            // Extract real battery level — offset 2, easy to change
+            let kBatteryByteOffset = 2
+            if data.count > kBatteryByteOffset {
+                let rawBattery = Int(data[kBatteryByteOffset])
+                // Sanity-check: valid percentage is 0–100
+                if (0...100).contains(rawBattery) {
+                    batteryLevel = rawBattery
+                    network.sendBattery(level: rawBattery)
+                }
+            }
 
         case kWhoopData:
             // DATA_FROM_STRAP — high-frequency accel + PPG firehose; log + forward to ingest

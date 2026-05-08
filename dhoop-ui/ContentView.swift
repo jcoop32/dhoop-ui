@@ -175,6 +175,18 @@ struct ContentView: View {
                 .disabled(ble.isScanning || ble.connectionStatus.hasPrefix("Connect"))
                 .opacity((ble.isScanning || ble.connectionStatus.hasPrefix("Connect")) ? 0.4 : 1)
 
+                Button(action: { ble.triggerHistoricalSync() }) {
+                    Label("Sync Sleep Data", systemImage: "clock.arrow.2.circlepath")
+                        .font(.system(size: 15, weight: .semibold)).foregroundColor(.white)
+                        .padding(.vertical, 11).padding(.horizontal, 22)
+                        .background(LinearGradient(colors: [.purple, .indigo],
+                                                   startPoint: .leading, endPoint: .trailing))
+                        .clipShape(Capsule())
+                        .shadow(color: .purple.opacity(0.35), radius: 8, y: 4)
+                }
+                .disabled(ble.connectionStatus != "Connected ✓")
+                .opacity(ble.connectionStatus != "Connected ✓" ? 0.4 : 1.0)
+
                 if ble.isScanning {
                     Button(action: { ble.stopScan() }) {
                         Label("Stop", systemImage: "stop.fill")
