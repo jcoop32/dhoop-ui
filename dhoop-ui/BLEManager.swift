@@ -8,6 +8,7 @@ import CoreBluetooth
 import Combine
 
 // Known Whoop characteristic UUIDs
+private let kCmdToStrap   = CBUUID(string: "61080002-8D6D-82B8-614A-1C8CB0F8DCC6") // CMD_TO_STRAP     (write trigger)
 private let kWhoopEvents  = CBUUID(string: "61080004-8D6D-82B8-614A-1C8CB0F8DCC6") // EVENTS_FROM_STRAP (low-freq)
 private let kWhoopData    = CBUUID(string: "61080005-8D6D-82B8-614A-1C8CB0F8DCC6") // DATA_FROM_STRAP  (accel + PPG firehose)
 private let kHeartRate    = CBUUID(string: "2A37")
@@ -168,6 +169,16 @@ extension BLEManager: CBPeripheralDelegate {
             // Read one-shot values immediately
             if char.uuid == kManufacturer || char.uuid == kBattery {
                 peripheral.readValue(for: char)
+            }
+            // Send "Start Activity" trigger to unlock the high-frequency sensor stream
+            if char.uuid == kCmdToStrap {
+                let hex = "aa0800a8238c03017d5ec627"
+                let triggerData = Data(stride(from: 0, to: hex.count, by: 2).compactMap {
+                    UInt8(hex[hex.index(hex.startIndex, offsetBy: $0) ...
+                             hex.index(hex.startIndex, offsetBy: $0 + 1)], radix: 16)
+                })
+                peripheral.writeValue(triggerData, for: char, type: .withoutResponse)
+                appendLog(.system, "Sent trigger command to CMD_TO_STRAP")
             }
         }
     }
