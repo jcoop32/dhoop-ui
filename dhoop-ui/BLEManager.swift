@@ -31,6 +31,7 @@ final class BLEManager: NSObject, ObservableObject {
     // MARK: - CoreBluetooth
     private var centralManager  : CBCentralManager!
     private var whoopPeripheral : CBPeripheral?
+    private var pingTimer       : Timer?
 
     // MARK: - Networking
     private let network = NetworkManager()
@@ -131,6 +132,12 @@ extension BLEManager: CBCentralManagerDelegate {
         connectionStatus = "Connected ✓"
         appendLog(.system, "Connected to \(peripheral.name ?? "Whoop")")
         peripheral.discoverServices(nil)
+        
+        // Start ping timer to indicate active connection
+        pingTimer?.invalidate()
+        pingTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
+            self?.network.sendPing()
+        }
     }
 
     func centralManager(_ central: CBCentralManager,
@@ -144,6 +151,11 @@ extension BLEManager: CBCentralManagerDelegate {
         connectionStatus = "Disconnected"
         whoopPeripheral  = nil
         heartRate        = nil
+        
+        // Stop pinging backend
+        pingTimer?.invalidate()
+        pingTimer = nil
+        
         appendLog(.system, "Disconnected: \(error?.localizedDescription ?? "clean")")
     }
 }

@@ -36,6 +36,10 @@ struct SensorPacket: Identifiable {
     let deviceUptimeMs: UInt32
     let payload       : Data    // full payload after AA header
 
+    // Decoded metrics (only present for SyncBatchData packets)
+    let parsedHR    : Int?
+    let parsedAccel : (x: Float, y: Float, z: Float)?
+
     /// Hex preview of the sensor body (bytes 12..<len-4, i.e. skip sub-header and CRC)
     var bodyHex: String {
         let start = min(12, payload.count)
@@ -89,5 +93,25 @@ struct SensorPacket: Identifiable {
             ? UInt32(payload[4]) | (UInt32(payload[5]) << 8)
                 | (UInt32(payload[6]) << 16) | (UInt32(payload[7]) << 24)
             : 0
+
+        // SyncBatchData packet: byte 6 == 0x05, minimum 52 bytes
+        // Offsets are absolute into the raw characteristic Data value.
+        if data.count >= 52, data[6] == 0x05 {
+            parsedHR = Int(data[21])
+
+            // Little-endian IEEE-754: assemble UInt32 bit-pattern manually,
+            // then reinterpret as Float — safe, no aliasing, endian-explicit.
+            func leFloat(at i: Int) -> Float {
+                let bits = UInt32(data[i])
+                    | (UInt32(data[i + 1]) << 8)
+                    | (UInt32(data[i + 2]) << 16)
+                    | (UInt32(data[i + 3]) << 24)
+                return Float(bitPattern: bits)
+            }
+            parsedAccel = (x: leFloat(at: 40), y: leFloat(at: 44), z: leFloat(at: 48))
+        } else {
+            parsedHR    = nil
+            parsedAccel = nil
+        }
     }
 }

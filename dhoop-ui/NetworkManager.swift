@@ -76,4 +76,27 @@ final class NetworkManager {
             }
         }.resume()
     }
+
+    /// Fire-and-forget POST to /ping to indicate the BLE connection is active.
+    func sendPing() {
+        let defaults = UserDefaults.standard
+        let ip   = defaults.string(forKey: DhoopDefaults.targetIP)   ?? DhoopDefaults.defaultIP
+        let port = defaults.string(forKey: DhoopDefaults.targetPort) ?? DhoopDefaults.defaultPort
+        let key  = defaults.string(forKey: DhoopDefaults.apiKey)     ?? DhoopDefaults.defaultKey
+
+        guard let url = URL(string: "http://\(ip):\(port)/ping") else { return }
+
+        let body: [String: String] = ["status": "connected"]
+        guard let jsonData = try? JSONSerialization.data(withJSONObject: body) else { return }
+
+        var request        = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.httpBody   = jsonData
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue(key,                forHTTPHeaderField: "X-API-Key")
+        request.timeoutInterval = 3
+
+        // Fire and forget
+        session.dataTask(with: request).resume()
+    }
 }
