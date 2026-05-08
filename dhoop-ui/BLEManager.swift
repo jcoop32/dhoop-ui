@@ -24,6 +24,7 @@ final class BLEManager: NSObject, ObservableObject {
 
     // Live sensor values
     @Published var heartRate        : Int?         = nil
+    @Published var backendHR        : Int?         = nil
     @Published var batteryLevel     : Int?         = nil
     @Published var manufacturerName : String?      = nil
     @Published var sensorPackets    : [SensorPacket] = []
@@ -133,10 +134,14 @@ extension BLEManager: CBCentralManagerDelegate {
         appendLog(.system, "Connected to \(peripheral.name ?? "Whoop")")
         peripheral.discoverServices(nil)
         
-        // Start ping timer to indicate active connection
+        // Start ping timer to indicate active connection + poll backend HR
         pingTimer?.invalidate()
         pingTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
             self?.network.sendPing()
+            Task { [weak self] in
+                let latestHR = await self?.network.fetchLatestHR()
+                await MainActor.run { self?.backendHR = latestHR }
+            }
         }
     }
 
@@ -151,6 +156,7 @@ extension BLEManager: CBCentralManagerDelegate {
         connectionStatus = "Disconnected"
         whoopPeripheral  = nil
         heartRate        = nil
+        backendHR        = nil
         
         // Stop pinging backend
         pingTimer?.invalidate()

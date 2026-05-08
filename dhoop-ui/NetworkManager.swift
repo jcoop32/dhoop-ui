@@ -17,6 +17,10 @@ enum DhoopDefaults {
     static let defaultKey  = "dhoop-admin"
 }
 
+// MARK: - API Response Models
+struct LatestResponse: Decodable { let hr: [HRRecord] }
+struct HRRecord: Decodable { let heart_rate: Int }
+
 // MARK: - NetworkManager
 final class NetworkManager {
 
@@ -121,5 +125,26 @@ final class NetworkManager {
 
         // Fire and forget
         session.dataTask(with: request).resume()
+    }
+
+    /// GET /api/latest — returns the most recent backend-verified HR.
+    func fetchLatestHR() async -> Int? {
+        let defaults = UserDefaults.standard
+        let ip   = defaults.string(forKey: DhoopDefaults.targetIP)   ?? DhoopDefaults.defaultIP
+        let port = defaults.string(forKey: DhoopDefaults.targetPort) ?? DhoopDefaults.defaultPort
+        let key  = defaults.string(forKey: DhoopDefaults.apiKey)     ?? DhoopDefaults.defaultKey
+
+        guard let url = URL(string: "http://\(ip):\(port)/api/latest") else { return nil }
+
+        var request        = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.setValue(key, forHTTPHeaderField: "X-API-Key")
+        request.timeoutInterval = 3
+
+        guard let (data, _) = try? await URLSession.shared.data(for: request),
+              let response  = try? JSONDecoder().decode(LatestResponse.self, from: data)
+        else { return nil }
+
+        return response.hr.first?.heart_rate
     }
 }

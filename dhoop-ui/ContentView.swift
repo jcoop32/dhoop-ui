@@ -95,17 +95,22 @@ struct ContentView: View {
                         .foregroundColor(.red.opacity(0.7))
                         .tracking(2)
                     HStack(alignment: .lastTextBaseline, spacing: 4) {
-                        Text(ble.heartRate.map { "\($0)" } ?? "—")
+                        Text(ble.backendHR.map { "\($0)" } ?? "—")
                             .font(.system(size: 52, weight: .bold, design: .rounded))
                             .foregroundColor(.white)
                             .contentTransition(.numericText())
-                            .animation(.spring(response: 0.3), value: ble.heartRate)
+                            .animation(.spring(response: 0.3), value: ble.backendHR)
                         Text("BPM")
                             .font(.system(size: 14, weight: .semibold, design: .monospaced))
                             .foregroundColor(.white.opacity(0.4))
                             .padding(.bottom, 8)
                     }
-                    if ble.heartRate == nil {
+                    if ble.backendHR != nil {
+                        Text("📡 LIVE FROM SERVER")
+                            .font(.system(size: 10, weight: .bold, design: .monospaced))
+                            .foregroundColor(.green)
+                            .tracking(1.5)
+                    } else {
                         Text("Waiting for signal…")
                             .font(.system(size: 11))
                             .foregroundColor(.white.opacity(0.3))
