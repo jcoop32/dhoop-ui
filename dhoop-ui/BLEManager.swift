@@ -210,6 +210,7 @@ extension BLEManager: CBPeripheralDelegate {
             let level = Int(data[0])
             batteryLevel = level
             appendLog(.data, "🔋 Battery: \(level)%")
+            network.sendBattery(level: level)
 
         case kManufacturer:
             if let name = String(data: data, encoding: .utf8) {
