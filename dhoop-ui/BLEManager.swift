@@ -228,7 +228,7 @@ extension BLEManager: CBPeripheralDelegate {
                 if sensorPackets.count >= 300 { sensorPackets.removeFirst() }
                 sensorPackets.append(packet)
             }
-            let dataHex = data.map { String(format: "%02X", $0) }.joined(separator: " ")
+            let dataHex = data.map { String(format: "%02X", $0) }.joined()
             appendLog(.data, "\(characteristic.uuid.uuidString)  →  \(dataHex)")
             network.ingest(hexPayload: dataHex)
 
