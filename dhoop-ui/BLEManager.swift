@@ -10,8 +10,8 @@ import UIKit
 
 // Known Whoop characteristic UUIDs
 private let kCmdToStrap   = CBUUID(string: "61080002-8D6D-82B8-614A-1C8CB0F8DCC6") // CMD_TO_STRAP     (write trigger)
-private let kWhoopEvents  = CBUUID(string: "61080005-8D6D-82B8-614A-1C8CB0F8DCC6") // EVENTS_FROM_STRAP (low-freq)
-private let kWhoopData    = CBUUID(string: "61080004-8D6D-82B8-614A-1C8CB0F8DCC6") // DATA_FROM_STRAP  (accel + PPG firehose)
+private let kWhoopEvents  = CBUUID(string: "61080004-8D6D-82B8-614A-1C8CB0F8DCC6") // EVENTS_FROM_STRAP (low-freq)
+private let kWhoopData    = CBUUID(string: "61080005-8D6D-82B8-614A-1C8CB0F8DCC6") // DATA_FROM_STRAP  (accel + PPG firehose)
 private let kHeartRate    = CBUUID(string: "2A37")
 private let kBattery      = CBUUID(string: "2A19")
 private let kManufacturer = CBUUID(string: "2A29")
