@@ -435,10 +435,12 @@ extension BLEManager: CBPeripheralDelegate {
 
         case kCmdFromStrap:
             let bytes = [UInt8](data)
-            // Gen4 response layout: AA lenLo lenHi crc8 | 0x23(inner marker) seq 0x24(cmd) ... batteryLE32
-            if bytes.count >= 12, bytes[0] == 0xAA, bytes[4] == 0x23, bytes[6] == 0x24 {
-                let battRaw = UInt32(bytes[8]) | (UInt32(bytes[9]) << 8) | (UInt32(bytes[10]) << 16) | (UInt32(bytes[11]) << 24)
-                let pct = Int(Double(battRaw) / 10.0)
+            // Gen4 COMMAND_RESPONSE layout: AA lenLo lenHi crc8 | type(0x24) seq cmd data...
+            // Battery response: type=0x24, cmd=0x1A (GET_BATTERY_LEVEL=26)
+            // Battery value: uint16 LE at data[2] (absolute byte[9]), divide by 10.0
+            if bytes.count >= 10, bytes[0] == 0xAA, bytes[4] == 0x24, bytes[6] == 0x1A {
+                let rawBatt = UInt16(bytes[9]) | (UInt16(bytes[10]) << 8)
+                let pct = Int((Double(rawBatt) / 10.0).rounded())
                 let clamped = max(0, min(100, pct))
                 DispatchQueue.main.async { self.batteryLevel = clamped }
                 network.sendBattery(level: clamped)
@@ -532,8 +534,8 @@ extension BLEManager {
             seq &+= 1
         }
 
-        // Cmd 0: GET_HELLO_HARVARD — request true strap battery; response arrives on kCmdFromStrap.
-        send(cmd: 0x23, payload: [])
+        // Cmd 0: GET_BATTERY_LEVEL (0x1A=26) — response arrives on kCmdFromStrap with cmd=0x1A
+        send(cmd: 0x1A, payload: [0x00])
 
         // Cmd 1: Toggle HR
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
