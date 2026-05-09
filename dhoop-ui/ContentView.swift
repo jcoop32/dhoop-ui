@@ -355,47 +355,20 @@ struct SensorPacketRowView: View {
                 .foregroundColor(.white.opacity(0.30))
                 .frame(width: 64, alignment: .leading)
 
-            Text(packet.type.label)
+            Text(packet.typeLabel)
                 .font(.system(size: 9, weight: .bold, design: .monospaced))
-                .foregroundColor(packet.type.color)
+                .foregroundColor(packet.color)
                 .padding(.horizontal, 5).padding(.vertical, 2)
-                .background(packet.type.color.opacity(0.15))
-                .overlay(RoundedRectangle(cornerRadius: 3).stroke(packet.type.color.opacity(0.4), lineWidth: 0.5))
+                .background(packet.color.opacity(0.15))
+                .overlay(RoundedRectangle(cornerRadius: 3).stroke(packet.color.opacity(0.4), lineWidth: 0.5))
                 .clipShape(RoundedRectangle(cornerRadius: 3))
 
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 8) {
-                    label("frame", value: String(format: "%04X", packet.frameCounter))
-                    label("uptime", value: packet.uptimeString)
-                    label("len", value: "\(packet.payload.count)B")
-                }
-                if let hr = packet.parsedHR, let accel = packet.parsedAccel {
-                    HStack(spacing: 12) {
-                        Text("❤️ \(hr) BPM")
-                            .font(.system(size: 13, weight: .semibold, design: .monospaced))
-                            .foregroundColor(.white)
-                        Spacer()
-                    }
-                    Text(String(format: "X: %+.2f  Y: %+.2f  Z: %+.2f",
-                                accel.x, accel.y, accel.z))
-                        .font(.system(size: 11, design: .monospaced))
-                        .foregroundColor(.cyan.opacity(0.85))
-                } else {
-                    Text(packet.bodyHex)
-                        .font(.system(size: 10, design: .monospaced))
-                        .foregroundColor(.white.opacity(0.5))
-                        .lineLimit(2)
-                }
-            }
+            Text(packet.bodyHex)
+                .font(.system(size: 10, design: .monospaced))
+                .foregroundColor(.white.opacity(0.5))
+                .lineLimit(2)
         }
         .padding(.vertical, 4)
-    }
-
-    private func label(_ key: String, value: String) -> some View {
-        HStack(spacing: 3) {
-            Text(key).font(.system(size: 9, design: .monospaced)).foregroundColor(.white.opacity(0.3))
-            Text(value).font(.system(size: 10, weight: .medium, design: .monospaced)).foregroundColor(.white.opacity(0.7))
-        }
     }
 }
 

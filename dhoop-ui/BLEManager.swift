@@ -10,8 +10,8 @@ import UIKit
 
 // Known Whoop characteristic UUIDs
 private let kCmdToStrap   = CBUUID(string: "61080002-8D6D-82B8-614A-1C8CB0F8DCC6") // CMD_TO_STRAP     (write trigger)
-private let kWhoopEvents  = CBUUID(string: "61080004-8D6D-82B8-614A-1C8CB0F8DCC6") // EVENTS_FROM_STRAP (low-freq)
-private let kWhoopData    = CBUUID(string: "61080005-8D6D-82B8-614A-1C8CB0F8DCC6") // DATA_FROM_STRAP  (accel + PPG firehose)
+private let kWhoopEvents  = CBUUID(string: "61080005-8D6D-82B8-614A-1C8CB0F8DCC6") // EVENTS_FROM_STRAP (low-freq)
+private let kWhoopData    = CBUUID(string: "61080004-8D6D-82B8-614A-1C8CB0F8DCC6") // DATA_FROM_STRAP  (accel + PPG firehose)
 private let kHeartRate    = CBUUID(string: "2A37")
 private let kBattery      = CBUUID(string: "2A19")
 private let kManufacturer = CBUUID(string: "2A29")
@@ -167,6 +167,11 @@ final class BLEManager: NSObject, ObservableObject {
             guard let self else { return }
             self.network.ingest(hexPayload: hexPayload)
             self.appendLog(.data, "🧩 Frame → \(hexPayload.prefix(32))…")
+
+            DispatchQueue.main.async {
+                if self.sensorPackets.count >= 300 { self.sensorPackets.removeFirst() }
+                self.sensorPackets.append(SensorPacket(hex: hexPayload))
+            }
         }
 
         NotificationCenter.default.addObserver(
@@ -398,7 +403,6 @@ extension BLEManager: CBPeripheralDelegate {
                 appendLog(.system, "CMD_TO_STRAP ready — trigger deferred to scene phase")
                 // Live-stream trigger is sent by appDidBecomeActive(), NOT here,
                 // so backgrounded reconnects never force the strap into high-power mode.
-                sendLiveStreamTrigger()
             }
         }
     }
@@ -427,20 +431,10 @@ extension BLEManager: CBPeripheralDelegate {
             }
 
         case kWhoopEvents:
-            // EVENTS_FROM_STRAP — low-frequency event + battery broadcast
+            // EVENTS_FROM_STRAP — low-frequency event notifications.
+            // Battery is handled exclusively by case kBattery: (0x2A19).
             let evtHex = data.map { String(format: "%02X", $0) }.joined(separator: " ")
             appendLog(.data, "\(characteristic.uuid.uuidString)  →  \(evtHex)")
-
-            // Extract real battery level — offset 2, easy to change
-            let kBatteryByteOffset = 2
-            if data.count > kBatteryByteOffset {
-                let rawBattery = Int(data[kBatteryByteOffset])
-                // Sanity-check: valid percentage is 0–100
-                if (0...100).contains(rawBattery) {
-                    batteryLevel = rawBattery
-                    network.sendBattery(level: rawBattery)
-                }
-            }
 
         case kWhoopData:
             // DATA_FROM_STRAP — high-frequency accel + PPG firehose.
@@ -448,12 +442,6 @@ extension BLEManager: CBPeripheralDelegate {
             // arrive as fragments. Feed each chunk into the FrameReassembler;
             // onFrame fires only when a complete Gen4 frame has been buffered.
             let bytes = [UInt8](data)
-
-            // Also attempt immediate SensorPacket decode for live UI metrics.
-            if let packet = SensorPacket(data: data) {
-                if sensorPackets.count >= 300 { sensorPackets.removeFirst() }
-                sensorPackets.append(packet)
-            }
 
             // Log the raw chunk (abbreviated so logs stay readable).
             let chunkHex = bytes.prefix(16).map { String(format: "%02X", $0) }.joined()
