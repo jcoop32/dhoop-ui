@@ -512,12 +512,12 @@ extension BLEManager {
         sendBackgroundRecordCommand()
     }
 
-    /// Sends five Gen4 commands:
-    ///   seq=0xA0  cmd=0x23  payload=[]     → GET_HELLO_HARVARD (request true battery)
+    /// Sends five Gen4 commands in sequence:
+    ///   seq=0xA0  cmd=0x1A  payload=[0x00] → GET_BATTERY_LEVEL (+0ms)
     ///   seq=0xA1  cmd=0x03  payload=[0x01] → Toggle HR          (+300ms)
     ///   seq=0xA2  cmd=0x3F  payload=[0x01] → Send R10 IMU       (+600ms)
-    ///   seq=0xA3  cmd=0x9A  payload=[0x01] → Toggle Optical R21 (+900ms)
-    ///   seq=0xA4  cmd=0x6C  payload=[0x01] → SpO2 enable        (+1200ms)
+    ///   seq=0xA3  cmd=0x6B  payload=[0x01] → ENABLE_OPTICAL_DATA (+900ms)
+    ///   seq=0xA4  cmd=0x6C  payload=[0x01] → TOGGLE_OPTICAL_MODE (+1200ms)
     private func sendLiveStreamTrigger() {
         guard let p = whoopPeripheral,
               let char = cmdCharacteristic,
@@ -547,10 +547,10 @@ extension BLEManager {
             guard let self, p.state == .connected else { return }
             send(cmd: 0x3F, payload: [0x01])
         }
-        // Cmd 3: Toggle Optical R21
+        // Cmd 3: ENABLE_OPTICAL_DATA (0x6B=107) — activates optical sensor streaming
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) { [weak self] in
             guard let self, p.state == .connected else { return }
-            send(cmd: 0x9A, payload: [0x01])
+            send(cmd: 0x6B, payload: [0x01])
         }
         // Cmd 4: SpO2 enable
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in
