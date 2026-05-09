@@ -229,7 +229,7 @@ final class BLEManager: NSObject, ObservableObject {
         }
         // cmd: 0x16 is SEND_HISTORICAL_DATA. We use an arbitrary sequence number like 0x99.
         let pkt = buildPacket(seq: 0x99, cmd: 0x16, payload: [0x00])
-        p.writeValue(pkt, for: char, type: .withoutResponse)
+        p.writeValue(pkt, for: char, type: .withResponse)
 
         let hexStr = pkt.map { String(format: "%02X", $0) }.joined(separator: " ")
         appendLog(.system, "📡 Sent historical sync: \(hexStr)")
@@ -518,7 +518,7 @@ extension BLEManager {
         // Helper: write a packet immediately and bump the sequence counter.
         func send(cmd: UInt8, payload: [UInt8]) {
             let pkt = buildPacket(seq: seq, cmd: cmd, payload: payload)
-            p.writeValue(pkt, for: char, type: .withoutResponse)
+            p.writeValue(pkt, for: char, type: .withResponse)
             let hex = pkt.map { String(format: "%02X", $0) }.joined()
             appendLog(.system, "📤 cmd=0x\(String(format: "%02X", cmd)) seq=0x\(String(format: "%02X", seq)) → \(hex)")
             seq &+= 1
@@ -553,7 +553,7 @@ extension BLEManager {
               p.state == .connected else { return }
         // Stop Activity — reverts strap to low-power Record-and-Dump mode
         let bytes: [UInt8] = [0xAA, 0x01, 0x00, 0x55]
-        p.writeValue(Data(bytes), for: char, type: .withoutResponse)
+        p.writeValue(Data(bytes), for: char, type: .withResponse)
         appendLog(.system, "🔴 Background: sent stop/record command")
     }
 }
