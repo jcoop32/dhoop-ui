@@ -40,27 +40,51 @@ struct ContentView: View {
 
     private var whoopHeaderView: some View {
         HStack {
-            Text(Date().formatted(.dateTime.weekday(.wide).month().day()).uppercased())
-                .font(.system(size: 14, weight: .bold, design: .default))
+            // Profile Icon
+            Image(systemName: "person.crop.circle")
+                .font(.system(size: 26, weight: .light))
                 .foregroundColor(.white)
             
             Spacer()
             
-            // Connection Status Dot
-            Circle()
-                .fill(statusColor)
-                .frame(width: 8, height: 8)
-                .shadow(color: statusColor.opacity(0.8), radius: 4)
+            // Date Pill
+            HStack(spacing: 12) {
+                Image(systemName: "chevron.left")
+                    .font(.system(size: 12, weight: .bold))
+                Text("TODAY")
+                    .font(.system(size: 12, weight: .bold))
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundColor(.white.opacity(0.3))
+            }
+            .foregroundColor(.white)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
+            .background(Color.white.opacity(0.12))
+            .clipShape(Capsule())
             
-            // Battery
+            Spacer()
+            
+            // Battery & Strap
             if let battery = ble.batteryLevel {
-                HStack(spacing: 2) {
-                    Image(systemName: "battery.100")
-                        .font(.system(size: 12))
+                HStack(spacing: 4) {
                     Text("\(battery)%")
-                        .font(.system(size: 12, weight: .bold))
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(.white.opacity(0.7))
+                    ZStack(alignment: .topTrailing) {
+                        Image(systemName: "applewatch")
+                            .font(.system(size: 20, weight: .light))
+                            .foregroundColor(.white)
+                        Circle()
+                            .fill(battery > 20 ? Color.green : Color.red)
+                            .frame(width: 6, height: 6)
+                            .offset(x: 2, y: -2)
+                    }
                 }
-                .foregroundColor(battery > 20 ? .green : .red)
+            } else {
+                Image(systemName: "applewatch.slash")
+                    .font(.system(size: 20, weight: .light))
+                    .foregroundColor(.white.opacity(0.4))
             }
         }
         .padding(.horizontal, 20)

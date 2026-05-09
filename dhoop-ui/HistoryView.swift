@@ -49,7 +49,7 @@ struct HistoryView: View {
 
     var body: some View {
         ScrollView(showsIndicators: false) {
-            VStack(spacing: 16) {
+            VStack(spacing: 0) {
                 if vm.isLoading {
                     SkeletonCard()
                     SkeletonList()
@@ -61,21 +61,61 @@ struct HistoryView: View {
                     EmptyHistoryView()
                 } else {
                     if let today = vm.records.first, today.isToday {
-                        TodayCard(record: today)
+                        WhoopRingsView(record: today)
+                        HealthStressCards()
+                        
+                        VStack(alignment: .leading, spacing: 16) {
+                            Text("My Day")
+                                .font(.system(size: 20, weight: .bold))
+                                .foregroundColor(.white)
+                                .padding(.horizontal, 20)
+                                .padding(.top, 20)
+                            
+                            HStack(spacing: 12) {
+                                ZStack {
+                                    Circle()
+                                        .stroke(Color.white.opacity(0.2), lineWidth: 1)
+                                        .background(Circle().fill(Color.white.opacity(0.05)))
+                                        .frame(width: 44, height: 44)
+                                    Text("d/")
+                                        .font(.system(size: 14, weight: .bold, design: .rounded))
+                                        .foregroundColor(.white)
+                                }
+                                HStack {
+                                    Image(systemName: "sun.haze")
+                                        .foregroundColor(.white.opacity(0.7))
+                                    Text("Daily Outlook")
+                                        .font(.system(size: 14, weight: .semibold))
+                                        .foregroundColor(.white)
+                                    Spacer()
+                                    Image(systemName: "chevron.right")
+                                        .font(.system(size: 12, weight: .semibold))
+                                        .foregroundColor(.white.opacity(0.5))
+                                }
+                                .padding()
+                                .background(Color(white: 0.12))
+                                .cornerRadius(12)
+                            }
+                            .padding(.horizontal, 20)
+                        }
                     }
-                    if let b = vm.baselines, b.hasData {
-                        NormalRangeCard(baselines: b)
-                    }
+                    
                     let pastRecords = vm.records.filter { !$0.isToday }
                     if !pastRecords.isEmpty {
                         DailyHistorySection(records: pastRecords)
+                            .padding(.top, 30)
+                            .padding(.horizontal, 16)
                     }
                 }
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
+            .padding(.bottom, 20)
         }
-        .background(Color(red: 0.05, green: 0.05, blue: 0.08))
+        .background(
+            LinearGradient(
+                colors: [Color(red: 0.1, green: 0.12, blue: 0.15), Color(red: 0.05, green: 0.05, blue: 0.05)],
+                startPoint: .top, endPoint: .bottom
+            ).ignoresSafeArea()
+        )
         .task { await vm.load() }
     }
 }
@@ -189,73 +229,165 @@ struct RangeMetricRow: View {
     }
 }
 
-// MARK: - Today Card
+// MARK: - WHOOP Rings View
 
-struct TodayCard: View {
+extension DailyRecord {
+    var computedRecovery: Int {
+        if let hrv = hrv_rmssd {
+            return min(100, max(1, Int((hrv / 80.0) * 100.0)))
+        }
+        return sleep_score
+    }
+    
+    var recoveryColor: Color {
+        let rec = computedRecovery
+        if rec >= 67 { return .green }
+        if rec >= 34 { return .yellow }
+        return .red
+    }
+}
+
+struct WhoopRingsView: View {
     let record: DailyRecord
 
     var body: some View {
-        VStack(spacing: 24) {
-            HStack(alignment: .top, spacing: 20) {
-                // Strain Ring
-                VStack {
-                    ZStack {
-                        Circle().stroke(Color.white.opacity(0.1), lineWidth: 8)
-                        Circle()
-                            .trim(from: 0, to: min(record.strain / 21.0, 1.0))
-                            .stroke(Color.blue, style: StrokeStyle(lineWidth: 8, lineCap: .round))
-                            .rotationEffect(.degrees(-90))
-                        Text(String(format: "%.1f", record.strain))
-                            .font(.system(size: 32, weight: .bold, design: .default))
-                            .foregroundColor(.white)
-                    }
-                    .frame(width: 120, height: 120)
-                    Text("STRAIN")
-                        .font(.system(size: 12, weight: .bold))
-                        .foregroundColor(.blue)
-                }
-
-                // Sleep Ring
-                VStack {
-                    ZStack {
-                        Circle().stroke(Color.white.opacity(0.1), lineWidth: 8)
-                        Circle()
-                            .trim(from: 0, to: Double(record.sleep_score) / 100.0)
-                            .stroke(Color.cyan, style: StrokeStyle(lineWidth: 8, lineCap: .round))
-                            .rotationEffect(.degrees(-90))
-                        Text("\(record.sleep_score)%")
-                            .font(.system(size: 32, weight: .bold, design: .default))
-                            .foregroundColor(.white)
-                    }
-                    .frame(width: 120, height: 120)
-                    Text("SLEEP")
-                        .font(.system(size: 12, weight: .bold))
-                        .foregroundColor(.cyan)
-                }
+        VStack(spacing: 30) {
+            Text("dhoop")
+                .font(.system(size: 18, weight: .regular, design: .default))
+                .tracking(8)
+                .foregroundColor(.white)
+                .padding(.top, 20)
+            
+            HStack(spacing: 20) {
+                // SLEEP (Cyan)
+                ringView(
+                    title: "SLEEP",
+                    valueText: "\(record.sleep_score)%",
+                    progress: Double(record.sleep_score) / 100.0,
+                    color: Color(red: 0.3, green: 0.7, blue: 0.9)
+                )
+                
+                // RECOVERY (Green/Yellow/Red)
+                ringView(
+                    title: "RECOVERY",
+                    valueText: "\(record.computedRecovery)%",
+                    progress: Double(record.computedRecovery) / 100.0,
+                    color: record.recoveryColor
+                )
+                
+                // STRAIN (Blue)
+                ringView(
+                    title: "STRAIN",
+                    valueText: String(format: "%.1f", record.strain),
+                    progress: record.strain / 21.0,
+                    color: Color(red: 0.1, green: 0.5, blue: 0.9)
+                )
             }
-            .padding(.top, 10)
-
-            // Recovery/HRV/RHR Metrics Below
-            HStack(spacing: 12) {
-                metricBox(title: "HRV", value: "\(Int(record.hrv_rmssd ?? 0))", unit: "ms", color: .cyan)
-                metricBox(title: "RHR", value: "\(Int(record.resting_hr ?? 0))", unit: "bpm", color: .red)
-            }
+            .padding(.horizontal, 10)
         }
-        .padding(.vertical, 20)
     }
-
-    func metricBox(title: String, value: String, unit: String, color: Color) -> some View {
-        VStack(spacing: 2) {
-            Text(title).font(.system(size: 12, weight: .bold)).foregroundColor(color)
-            HStack(alignment: .lastTextBaseline, spacing: 2) {
-                Text(value).font(.system(size: 24, weight: .bold)).foregroundColor(.white)
-                Text(unit).font(.system(size: 12, weight: .semibold)).foregroundColor(.white.opacity(0.5))
+    
+    func ringView(title: String, valueText: String, progress: Double, color: Color) -> some View {
+        VStack(spacing: 12) {
+            ZStack {
+                Circle()
+                    .stroke(Color.white.opacity(0.15), lineWidth: 7)
+                Circle()
+                    .trim(from: 0, to: CGFloat(min(progress, 1.0)))
+                    .stroke(color, style: StrokeStyle(lineWidth: 7, lineCap: .round))
+                    .rotationEffect(.degrees(-90))
+                
+                Text(valueText)
+                    .font(.system(size: 24, weight: .bold))
+                    .foregroundColor(.white)
             }
+            .frame(width: 90, height: 90)
+            
+            HStack(spacing: 2) {
+                Text(title)
+                    .font(.system(size: 10, weight: .bold))
+                    .tracking(1)
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 8, weight: .bold))
+            }
+            .foregroundColor(.white.opacity(0.7))
         }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 12)
-        .background(Color.white.opacity(0.05))
-        .cornerRadius(12)
+    }
+}
+
+// MARK: - Health & Stress Cards
+
+struct HealthStressCards: View {
+    var body: some View {
+        HStack(spacing: 12) {
+            // Health Monitor Card
+            VStack(alignment: .leading, spacing: 20) {
+                HStack {
+                    Text("HEALTH\nMONITOR")
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundColor(.white)
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundColor(.white.opacity(0.5))
+                }
+                
+                HStack(spacing: 8) {
+                    Image(systemName: "checkmark.square.fill")
+                        .font(.system(size: 20))
+                        .foregroundColor(.green)
+                    
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("WITHIN RANGE")
+                            .font(.system(size: 10, weight: .bold))
+                            .foregroundColor(.green)
+                        Text("5/5 Metrics")
+                            .font(.system(size: 10))
+                            .foregroundColor(.white.opacity(0.6))
+                    }
+                }
+            }
+            .padding(16)
+            .background(Color(white: 0.15))
+            .cornerRadius(16)
+            
+            // Stress Monitor Card
+            VStack(alignment: .leading, spacing: 20) {
+                HStack {
+                    Text("STRESS\nMONITOR")
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundColor(.white)
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundColor(.white.opacity(0.5))
+                }
+                
+                HStack(spacing: 8) {
+                    Text("1.7")
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 4)
+                        .background(Color.green)
+                        .cornerRadius(4)
+                    
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("MEDIUM")
+                            .font(.system(size: 10, weight: .bold))
+                            .foregroundColor(.green)
+                        Text("4:15 PM")
+                            .font(.system(size: 10))
+                            .foregroundColor(.white.opacity(0.6))
+                    }
+                }
+            }
+            .padding(16)
+            .background(Color(white: 0.15))
+            .cornerRadius(16)
+        }
+        .padding(.horizontal, 20)
+        .padding(.top, 30)
     }
 }
 
