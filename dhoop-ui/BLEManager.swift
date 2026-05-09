@@ -220,25 +220,11 @@ final class BLEManager: NSObject, ObservableObject {
             appendLog(.system, "Cannot sync: Not connected or CMD characteristic missing.")
             return
         }
+        // cmd: 0x16 is SEND_HISTORICAL_DATA. We use an arbitrary sequence number like 0x99.
+        let pkt = buildPacket(seq: 0x99, cmd: 0x16, payload: [0x00])
+        p.writeValue(pkt, for: char, type: .withoutResponse)
 
-        // Build 9-byte sync frame: 0xAA 0x10 0x00 [UInt32 LE timestamp] [CRC-16 LE]
-        var frame = [UInt8](repeating: 0, count: 9)
-        frame[0] = 0xAA
-        frame[1] = 0x10
-        frame[2] = 0x00
-
-        let ts = UInt32(Date().timeIntervalSince1970)
-        frame[3] = UInt8(ts & 0xFF)
-        frame[4] = UInt8((ts >> 8)  & 0xFF)
-        frame[5] = UInt8((ts >> 16) & 0xFF)
-        frame[6] = UInt8((ts >> 24) & 0xFF)
-
-        let crc = crc16(Array(frame[0..<7]))
-        frame[7] = UInt8(crc & 0xFF)
-        frame[8] = UInt8((crc >> 8) & 0xFF)
-
-        let hexStr = frame.map { String(format: "%02X", $0) }.joined(separator: " ")
-        p.writeValue(Data(frame), for: char, type: .withoutResponse)
+        let hexStr = pkt.map { String(format: "%02X", $0) }.joined(separator: " ")
         appendLog(.system, "📡 Sent historical sync: \(hexStr)")
     }
 
@@ -252,28 +238,27 @@ final class BLEManager: NSObject, ObservableObject {
     ///   - payload: Command-specific payload bytes.
     /// - Returns: Fully framed `Data` ready for `.writeValue(_:for:type:)`.
     func buildPacket(seq: UInt8, cmd: UInt8, payload: [UInt8]) -> Data {
-        // Body = [0x23, seq, cmd] + payload, zero-padded to exactly 8 bytes.
-        var body = [UInt8](repeating: 0, count: 8)
-        body[0] = 0x23
-        body[1] = seq
-        body[2] = cmd
-        for (i, b) in payload.prefix(5).enumerated() {
-            body[3 + i] = b
+        var inner = [UInt8]()
+        inner.append(0x23)
+        inner.append(seq)
+        inner.append(cmd)
+        inner.append(contentsOf: payload)
+
+        // Pad to a multiple of 4 bytes
+        let pad = (4 - inner.count % 4) % 4
+        if pad > 0 {
+            inner.append(contentsOf: [UInt8](repeating: 0, count: pad))
         }
 
-        // Length field = number of body bytes (always 8 here).
-        let bodyLen = UInt16(body.count)   // 0x0008
-        let lenLo   = UInt8(bodyLen & 0xFF)
-        let lenHi   = UInt8((bodyLen >> 8) & 0xFF)
+        let length = UInt16(inner.count + 4) // MUST include +4 for CRC32
+        let lenLo = UInt8(length & 0xFF)
+        let lenHi = UInt8((length >> 8) & 0xFF)
 
-        // CRC-8 covers only the two length bytes.
         let headerCRC = crc8([lenLo, lenHi])
+        let checksum = crc32(inner) // Compute ONLY over the inner body!
 
-        // Assemble header + body (before CRC-32 trailer).
-        var packet: [UInt8] = [0xAA, lenLo, lenHi, headerCRC] + body
-
-        // CRC-32 covers the entire packet so far.
-        let checksum = crc32(packet)
+        var packet: [UInt8] = [0xAA, lenLo, lenHi, headerCRC]
+        packet.append(contentsOf: inner)
         packet.append(UInt8(checksum & 0xFF))
         packet.append(UInt8((checksum >> 8)  & 0xFF))
         packet.append(UInt8((checksum >> 16) & 0xFF))
