@@ -14,19 +14,26 @@ final class HistoryViewModel: ObservableObject {
     @Published var records:   [DailyRecord]   = []
     @Published var isLoading: Bool            = false
     @Published var errorMessage: String?      = nil
+    @Published var isEmpty: Bool              = false
 
     private let network = NetworkManager()
 
     func load() async {
         isLoading    = true
         errorMessage = nil
+        isEmpty      = false
         async let b  = network.fetchBaselines()
         async let r  = network.fetchHistory()
         let (fetchedBaselines, fetchedRecords) = await (b, r)
         baselines = fetchedBaselines
         records   = fetchedRecords
-        if baselines == nil && records.isEmpty {
+
+        if fetchedBaselines == nil && fetchedRecords.isEmpty {
+            // Could not reach server at all
             errorMessage = "Could not reach the server.\nCheck your connection settings."
+        } else if fetchedRecords.isEmpty {
+            // Server is reachable but no daily summaries exist yet
+            isEmpty = true
         }
         isLoading = false
     }
@@ -47,8 +54,10 @@ struct HistoryView: View {
                     ErrorStateView(message: msg) {
                         Task { await vm.load() }
                     }
+                } else if vm.isEmpty {
+                    EmptyHistoryView()
                 } else {
-                    if let b = vm.baselines {
+                    if let b = vm.baselines, b.hasData {
                         NormalRangeCard(baselines: b)
                     }
                     if !vm.records.isEmpty {
@@ -358,6 +367,30 @@ struct SkeletonRow: View {
                     shimmer = true
                 }
             }
+    }
+}
+
+// MARK: - Empty History State
+
+struct EmptyHistoryView: View {
+    var body: some View {
+        VStack(spacing: 20) {
+            Image(systemName: "chart.bar.xaxis")
+                .font(.system(size: 44))
+                .foregroundStyle(
+                    LinearGradient(colors: [.cyan.opacity(0.6), .blue.opacity(0.4)],
+                                   startPoint: .top, endPoint: .bottom)
+                )
+            Text("No History Yet")
+                .font(.system(size: 18, weight: .bold, design: .rounded))
+                .foregroundColor(.white)
+            Text("Daily summaries will appear here after\nyour first full day of tracking.")
+                .font(.system(size: 13))
+                .foregroundColor(.white.opacity(0.4))
+                .multilineTextAlignment(.center)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.top, 60)
     }
 }
 

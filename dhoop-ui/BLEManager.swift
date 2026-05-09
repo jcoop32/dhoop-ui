@@ -154,12 +154,20 @@ final class BLEManager: NSObject, ObservableObject {
     @Published var batteryLevel     : Int?         = nil
     @Published var manufacturerName : String?      = nil
     @Published var sensorPackets    : [SensorPacket] = []
+    @Published var isSyncing        : Bool         = false
+    @Published var syncProgress     : String       = ""
 
     // MARK: - CoreBluetooth
     private var centralManager    : CBCentralManager!
     private var whoopPeripheral   : CBPeripheral?
     private var cmdCharacteristic : CBCharacteristic?
     private var pingTimer         : Timer?
+
+    /// Stored peripheral UUID so we can reconnect without re-scanning
+    private var storedPeripheralID: UUID?
+
+    /// Called by onFrame when a HISTORY_END metadata arrives — drives the sync protocol
+    private var historyEndContinuation: CheckedContinuation<UInt32, Never>?
 
     // MARK: - Frame reassembly
     private let reassembler = FrameReassembler()
@@ -169,14 +177,56 @@ final class BLEManager: NSObject, ObservableObject {
 
     // MARK: - Init
     override init() {
+        // Restore last-known peripheral UUID for fast reconnect
+        if let uuidStr = UserDefaults.standard.string(forKey: "whoop_peripheral_uuid"),
+           let uuid = UUID(uuidString: uuidStr) {
+            storedPeripheralID = uuid
+        }
         super.init()
         centralManager = CBCentralManager(delegate: self, queue: nil)
 
         // Wire up reassembler → ingest pipeline
         reassembler.onFrame = { [weak self] hexPayload in
             guard let self else { return }
+
+            // Decode packet type from byte[4] of the hex payload
+            let frameBytes = (0..<(hexPayload.count/2)).compactMap { i -> UInt8? in
+                let s = hexPayload.index(hexPayload.startIndex, offsetBy: i*2)
+                let e = hexPayload.index(s, offsetBy: 2)
+                return UInt8(hexPayload[s..<e], radix: 16)
+            }
+
+            let pktType = frameBytes.count > 4 ? frameBytes[4] : 0
+
+            // 0x31 = METADATA — drives the historical sync handshake, NOT forwarded to backend
+            if pktType == 0x31 {
+                let metaType = frameBytes.count > 5 ? frameBytes[5] : 0
+                switch metaType {
+                case 2: // HISTORY_END — extract trim and send acknowledgment
+                    if frameBytes.count >= 21 {
+                        let trim = UInt32(frameBytes[17])
+                            | (UInt32(frameBytes[18]) << 8)
+                            | (UInt32(frameBytes[19]) << 16)
+                            | (UInt32(frameBytes[20]) << 24)
+                        self.appendLog(.system, "📬 HISTORY_END trim=\(trim)")
+                        self.historyEndContinuation?.resume(returning: trim)
+                        self.historyEndContinuation = nil
+                    }
+                case 3: // HISTORY_COMPLETE — sync finished
+                    self.appendLog(.system, "✅ Historical sync complete")
+                    DispatchQueue.main.async { self.isSyncing = false; self.syncProgress = "" }
+                    self.historyEndContinuation?.resume(returning: 0xFFFFFFFF)
+                    self.historyEndContinuation = nil
+                default:
+                    self.appendLog(.system, "📋 METADATA type=\(metaType)")
+                }
+                return // Never forward metadata to backend
+            }
+
+            // 0x2F = HISTORICAL_DATA — forward to backend exactly like live data
+            // 0x2B / 0x28 = live realtime data — forward to backend
             self.network.ingest(hexPayload: hexPayload)
-            self.appendLog(.data, "🧩 Frame → \(hexPayload.prefix(32))…")
+            self.appendLog(.data, "🧩 Frame[0x\(String(format:"%02X",pktType))] → \(hexPayload.prefix(32))…")
 
             DispatchQueue.main.async {
                 if self.sensorPackets.count >= 300 { self.sensorPackets.removeFirst() }
@@ -202,6 +252,20 @@ final class BLEManager: NSObject, ObservableObject {
             appendLog(.system, "Central not powered on yet.")
             return
         }
+        // Fast-path: try to reconnect directly to the last known peripheral
+        if let uuid = storedPeripheralID {
+            let known = centralManager.retrievePeripherals(withIdentifiers: [uuid])
+            if let p = known.first {
+                appendLog(.system, "⚡️ Fast-reconnect to cached peripheral — skipping scan")
+                connectionStatus    = "Connecting…"
+                isScanning          = false
+                whoopPeripheral     = p
+                p.delegate          = self
+                centralManager.connect(p, options: nil)
+                return
+            }
+        }
+        // Slow-path: full BLE scan
         logEntries.removeAll()
         sensorPackets.removeAll()
         heartRate    = nil
@@ -210,7 +274,6 @@ final class BLEManager: NSObject, ObservableObject {
         connectionStatus = "Scanning…"
         isScanning       = true
         appendLog(.system, "Scanning for Whoop…")
-        // Filter directly to Whoop's root service — suppresses all other BLE devices
         let whoopRootSvc = CBUUID(string: "61080001-8D6D-82B8-614A-1C8CB0F8DCC6")
         centralManager.scanForPeripherals(withServices: [whoopRootSvc], options: [
             CBCentralManagerScanOptionAllowDuplicatesKey: false
@@ -238,16 +301,69 @@ final class BLEManager: NSObject, ObservableObject {
     }
 
     func triggerHistoricalSync() {
-        guard let p = whoopPeripheral, let char = cmdCharacteristic else {
+        guard let p = whoopPeripheral, let char = cmdCharacteristic,
+              p.state == .connected else {
             appendLog(.system, "Cannot sync: Not connected or CMD characteristic missing.")
             return
         }
-        // cmd: 0x16 is SEND_HISTORICAL_DATA. We use an arbitrary sequence number like 0x99.
-        let pkt = buildPacket(seq: 0x99, cmd: 0x16, payload: [0x00])
-        p.writeValue(pkt, for: char, type: .withResponse)
+        guard !isSyncing else {
+            appendLog(.system, "Sync already in progress")
+            return
+        }
+        Task { await runHistoricalSync(peripheral: p, char: char) }
+    }
 
-        let hexStr = pkt.map { String(format: "%02X", $0) }.joined(separator: " ")
-        appendLog(.system, "📡 Sent historical sync: \(hexStr)")
+    /// Full historical sync loop — mirrors whoomp.js downloadHistoryInternal().
+    /// Sends SEND_HISTORICAL_DATA, then loops responding to HISTORY_END metadata
+    /// until HISTORY_COMPLETE is received.
+    private func runHistoricalSync(peripheral: CBPeripheral, char: CBCharacteristic) async {
+        await MainActor.run { isSyncing = true; syncProgress = "Starting historical sync…" }
+        appendLog(.system, "⏳ Historical sync started (SEND_HISTORICAL_DATA)")
+
+        // Send initial SEND_HISTORICAL_DATA (cmd=0x16)
+        let startPkt = buildPacket(seq: 0x99, cmd: 0x16, payload: [0x00])
+        peripheral.writeValue(startPkt, for: char, type: .withResponse)
+
+        var batchCount = 0
+        while true {
+            // Wait for the next HISTORY_END or HISTORY_COMPLETE (max 15s per batch)
+            let timeoutTask = Task { [weak self] in
+                try? await Task.sleep(nanoseconds: 15_000_000_000)
+                self?.appendLog(.system, "⏱️ Sync timeout — assuming no more history")
+                self?.historyEndContinuation?.resume(returning: 0xFFFFFFFF)
+                self?.historyEndContinuation = nil
+            }
+
+            let trim = await withCheckedContinuation { (cont: CheckedContinuation<UInt32, Never>) in
+                self.historyEndContinuation = cont
+            }
+            timeoutTask.cancel()
+
+            if trim == 0xFFFFFFFF {
+                // HISTORY_COMPLETE sentinel
+                await MainActor.run { isSyncing = false; syncProgress = "" }
+                appendLog(.system, "✅ Historical sync complete — \(batchCount) batch(es) fetched")
+                return
+            }
+
+            // Send HISTORICAL_DATA_RESULT (cmd=0x17) acknowledgment:
+            //   payload = [0x01] + uint32LE(trim) + uint32LE(0)
+            batchCount += 1
+            await MainActor.run { syncProgress = "Syncing batch \(batchCount)…" }
+
+            var payload = [UInt8](repeating: 0, count: 9)
+            payload[0] = 0x01
+            payload[1] = UInt8(trim & 0xFF)
+            payload[2] = UInt8((trim >> 8) & 0xFF)
+            payload[3] = UInt8((trim >> 16) & 0xFF)
+            payload[4] = UInt8((trim >> 24) & 0xFF)
+            // payload[5..8] = 0x00 zero padding
+
+            let resultPkt = buildPacket(seq: UInt8(0xB0 &+ UInt8(batchCount & 0xFF)),
+                                        cmd: 0x17, payload: payload)
+            peripheral.writeValue(resultPkt, for: char, type: .withResponse)
+            appendLog(.system, "📤 HISTORICAL_DATA_RESULT batch=\(batchCount) trim=\(trim)")
+        }
     }
 
     // MARK: - Gen4 Packet Builder
@@ -315,7 +431,9 @@ extension BLEManager: CBCentralManagerDelegate {
     func centralManagerDidUpdateState(_ central: CBCentralManager) {
         switch central.state {
         case .poweredOn:
-            appendLog(.system, "Bluetooth powered ON — ready to scan")
+            appendLog(.system, "Bluetooth powered ON — auto-connecting…")
+            // Auto-connect on every app launch / Bluetooth enable
+            startScan()
         case .poweredOff:
             connectionStatus = "Bluetooth Off"
             appendLog(.system, "Bluetooth powered off")
@@ -342,6 +460,9 @@ extension BLEManager: CBCentralManagerDelegate {
         central.stopScan()
         isScanning          = false
         connectionStatus    = "Connecting…"
+        storedPeripheralID  = peripheral.identifier
+        // Persist UUID so next launch can fast-reconnect without scanning
+        UserDefaults.standard.set(peripheral.identifier.uuidString, forKey: "whoop_peripheral_uuid")
         whoopPeripheral     = peripheral
         peripheral.delegate = self
         central.connect(peripheral, options: nil)
@@ -351,7 +472,7 @@ extension BLEManager: CBCentralManagerDelegate {
         connectionStatus = "Connected ✓"
         appendLog(.system, "Connected to \(peripheral.name ?? "Whoop")")
         peripheral.discoverServices(nil)
-        
+
         // Start ping timer to indicate active connection + poll backend HR
         pingTimer?.invalidate()
         pingTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
@@ -360,6 +481,21 @@ extension BLEManager: CBCentralManagerDelegate {
                 let latestHR = await self?.network.fetchLatestHR()
                 await MainActor.run { self?.backendHR = latestHR }
             }
+        }
+
+        // Sequence: wait for characteristic discovery → historical sync → live stream
+        Task { [weak self] in
+            guard let self else { return }
+            // Wait for characteristic discovery & CMD_TO_STRAP to be ready
+            try? await Task.sleep(nanoseconds: 2_000_000_000)  // 2s
+            guard let p = self.whoopPeripheral, let char = self.cmdCharacteristic,
+                  p.state == .connected else { return }
+
+            // 1. Historical sync: dumps all data stored on-strap since last disconnect
+            await self.runHistoricalSync(peripheral: p, char: char)
+
+            // 2. Live stream: starts after sync completes (or if strap doesn't support it)
+            self.sendLiveStreamTrigger()
         }
     }
 
@@ -371,18 +507,39 @@ extension BLEManager: CBCentralManagerDelegate {
 
     func centralManager(_ central: CBCentralManager,
                         didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
+        let wasUnexpected = error != nil
         connectionStatus = "Disconnected"
-        whoopPeripheral   = nil
         cmdCharacteristic = nil
         heartRate        = nil
         backendHR        = nil
+        isSyncing        = false
         reassembler.reset()
-        
+        historyEndContinuation?.resume(returning: 0xFFFFFFFF)
+        historyEndContinuation = nil
+
         // Stop pinging backend
         pingTimer?.invalidate()
         pingTimer = nil
-        
+
         appendLog(.system, "Disconnected: \(error?.localizedDescription ?? "clean")")
+
+        // Auto-reconnect on unexpected drops (range loss, etc.)
+        // Keep whoopPeripheral reference alive for reconnect attempt.
+        if wasUnexpected, let p = whoopPeripheral ?? central.retrievePeripherals(withIdentifiers: storedPeripheralID.map { [$0] } ?? []).first {
+            whoopPeripheral = p
+            connectionStatus = "Reconnecting…"
+            appendLog(.system, "⚡️ Unexpected disconnect — reconnecting in 2s…")
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
+                guard let self else { return }
+                // If still disconnected, attempt reconnect
+                if p.state != .connected {
+                    self.appendLog(.system, "🔄 Attempting reconnect to \(p.name ?? "Whoop")…")
+                    central.connect(p, options: nil)
+                }
+            }
+        } else {
+            whoopPeripheral = nil
+        }
     }
 }
 

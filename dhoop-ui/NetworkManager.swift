@@ -22,10 +22,13 @@ struct LatestResponse: Decodable { let hr: [HRRecord] }
 struct HRRecord: Decodable { let heart_rate: Int }
 
 struct Baselines: Decodable {
+    let status: String?
     let hrv_low: Double
     let hrv_high: Double
     let rhr_low: Double
     let rhr_high: Double
+
+    var hasData: Bool { (hrv_high - hrv_low) > 0.01 }
 }
 
 struct DailyRecord: Decodable, Identifiable {

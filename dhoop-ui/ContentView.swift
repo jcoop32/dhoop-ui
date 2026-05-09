@@ -158,48 +158,65 @@ struct ContentView: View {
                 Text(ble.connectionStatus)
                     .font(.system(size: 13, weight: .medium, design: .monospaced))
                     .foregroundColor(.white.opacity(0.75))
+                Spacer()
+                // Manual retry — only shown when disconnected
+                if !ble.connectionStatus.hasPrefix("Connect") && !ble.isScanning {
+                    Button(action: { ble.startScan() }) {
+                        Label("Retry", systemImage: "arrow.clockwise")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundColor(.cyan)
+                            .padding(.vertical, 6).padding(.horizontal, 14)
+                            .background(Color.cyan.opacity(0.1))
+                            .clipShape(Capsule())
+                            .overlay(Capsule().stroke(Color.cyan.opacity(0.3), lineWidth: 1))
+                    }
+                    .transition(.opacity)
+                }
             }
             .padding(.horizontal, 14).padding(.vertical, 6)
             .background(Color.white.opacity(0.06)).clipShape(Capsule())
 
-            HStack(spacing: 12) {
-                Button(action: { ble.startScan() }) {
-                    Label("Scan & Connect", systemImage: "dot.radiowaves.left.and.right")
-                        .font(.system(size: 15, weight: .semibold)).foregroundColor(.black)
-                        .padding(.vertical, 11).padding(.horizontal, 22)
-                        .background(LinearGradient(colors: [.cyan, Color(red: 0.2, green: 0.5, blue: 1)],
-                                                   startPoint: .leading, endPoint: .trailing))
-                        .clipShape(Capsule())
-                        .shadow(color: .cyan.opacity(0.35), radius: 8, y: 4)
+            // Historical sync progress + manual sync button
+            HStack(spacing: 8) {
+                if ble.isSyncing {
+                    HStack(spacing: 6) {
+                        ProgressView().scaleEffect(0.7).tint(.purple)
+                        Text(ble.syncProgress)
+                            .font(.system(size: 12, weight: .medium, design: .monospaced))
+                            .foregroundColor(.purple.opacity(0.85))
+                    }
+                    .padding(.horizontal, 12).padding(.vertical, 6)
+                    .background(Color.purple.opacity(0.1)).clipShape(Capsule())
+                    .overlay(Capsule().stroke(Color.purple.opacity(0.25), lineWidth: 1))
+                    .transition(.opacity)
+                } else {
+                    Button(action: { ble.triggerHistoricalSync() }) {
+                        Label("Sync History", systemImage: "clock.arrow.2.circlepath")
+                            .font(.system(size: 12, weight: .semibold)).foregroundColor(.purple)
+                            .padding(.vertical, 6).padding(.horizontal, 14)
+                            .background(Color.purple.opacity(0.1)).clipShape(Capsule())
+                            .overlay(Capsule().stroke(Color.purple.opacity(0.3), lineWidth: 1))
+                    }
+                    .disabled(ble.connectionStatus != "Connected ✓")
+                    .opacity(ble.connectionStatus != "Connected ✓" ? 0.3 : 1.0)
+                    .transition(.opacity)
                 }
-                .disabled(ble.isScanning || ble.connectionStatus.hasPrefix("Connect"))
-                .opacity((ble.isScanning || ble.connectionStatus.hasPrefix("Connect")) ? 0.4 : 1)
-
-                Button(action: { ble.triggerHistoricalSync() }) {
-                    Label("Sync Sleep Data", systemImage: "clock.arrow.2.circlepath")
-                        .font(.system(size: 15, weight: .semibold)).foregroundColor(.white)
-                        .padding(.vertical, 11).padding(.horizontal, 22)
-                        .background(LinearGradient(colors: [.purple, .indigo],
-                                                   startPoint: .leading, endPoint: .trailing))
-                        .clipShape(Capsule())
-                        .shadow(color: .purple.opacity(0.35), radius: 8, y: 4)
-                }
-                .disabled(ble.connectionStatus != "Connected ✓")
-                .opacity(ble.connectionStatus != "Connected ✓" ? 0.4 : 1.0)
-
                 if ble.isScanning {
                     Button(action: { ble.stopScan() }) {
                         Label("Stop", systemImage: "stop.fill")
-                            .font(.system(size: 15, weight: .semibold)).foregroundColor(.white)
-                            .padding(.vertical, 11).padding(.horizontal, 18)
-                            .background(Color.red.opacity(0.75)).clipShape(Capsule())
+                            .font(.system(size: 12, weight: .semibold)).foregroundColor(.red)
+                            .padding(.vertical, 6).padding(.horizontal, 14)
+                            .background(Color.red.opacity(0.1)).clipShape(Capsule())
+                            .overlay(Capsule().stroke(Color.red.opacity(0.3), lineWidth: 1))
                     }
                     .transition(.scale.combined(with: .opacity))
                 }
             }
+            .animation(.spring(response: 0.3, dampingFraction: 0.7), value: ble.isSyncing)
             .animation(.spring(response: 0.3, dampingFraction: 0.7), value: ble.isScanning)
         }
-        .padding(.vertical, 12)
+        .padding(.vertical, 10)
+        .animation(.spring(response: 0.3, dampingFraction: 0.7), value: ble.connectionStatus)
     }
 
     // MARK: Tab Strip
