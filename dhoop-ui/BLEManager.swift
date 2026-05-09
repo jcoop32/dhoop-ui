@@ -440,10 +440,20 @@ extension BLEManager: CBPeripheralDelegate {
             }
 
         case kWhoopEvents:
-            // EVENTS_FROM_STRAP — low-frequency event notifications.
-            // Battery is handled exclusively by case kBattery: (0x2A19).
-            let evtHex = data.map { String(format: "%02X", $0) }.joined(separator: " ")
-            appendLog(.data, "\(characteristic.uuid.uuidString)  →  \(evtHex)")
+            // Format as a continuous hex string (no spaces) for the backend
+            let dataHex = data.map { String(format: "%02X", $0) }.joined()
+
+            // Immediately forward event packets to the backend
+            network.ingest(hexPayload: dataHex)
+
+            // Decode for UI
+            let packet = SensorPacket(hex: dataHex)
+            DispatchQueue.main.async {
+                if self.sensorPackets.count >= 300 { self.sensorPackets.removeFirst() }
+                self.sensorPackets.append(packet)
+            }
+
+            appendLog(.data, "EVENT → \(dataHex.prefix(20))… (\(data.count)B)")
 
         case kWhoopData:
             // DATA_FROM_STRAP — high-frequency accel + PPG firehose.
