@@ -208,6 +208,7 @@ struct ContentView: View {
             tabButton("Log",      index: 0, icon: "list.bullet")
             tabButton("Sensors",  index: 1, icon: "waveform")
             tabButton("Settings", index: 2, icon: "gearshape")
+            tabButton("History",  index: 3, icon: "chart.bar.xaxis")
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
@@ -237,8 +238,10 @@ struct ContentView: View {
             logScrollView
         } else if selectedTab == 1 {
             sensorScrollView
-        } else {
+        } else if selectedTab == 2 {
             SettingsView()
+        } else {
+            HistoryView()
         }
     }
 

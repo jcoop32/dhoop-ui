@@ -6,6 +6,7 @@
 import Foundation
 import CoreBluetooth
 import Combine
+import UIKit
 
 // Known Whoop characteristic UUIDs
 private let kCmdToStrap   = CBUUID(string: "61080002-8D6D-82B8-614A-1C8CB0F8DCC6") // CMD_TO_STRAP     (write trigger)
@@ -42,6 +43,16 @@ final class BLEManager: NSObject, ObservableObject {
     override init() {
         super.init()
         centralManager = CBCentralManager(delegate: self, queue: nil)
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(appDidBecomeActive),
+            name: UIApplication.didBecomeActiveNotification, object: nil)
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(appDidEnterBackground),
+            name: UIApplication.didEnterBackgroundNotification, object: nil)
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
     }
 
     // MARK: - Public API
@@ -89,16 +100,38 @@ final class BLEManager: NSObject, ObservableObject {
             appendLog(.system, "Cannot sync: Not connected or CMD characteristic missing.")
             return
         }
-        
-        // Placeholder command for historical sync
-        let hex = "03040000"
-        let triggerData = Data(stride(from: 0, to: hex.count, by: 2).compactMap {
-            UInt8(hex[hex.index(hex.startIndex, offsetBy: $0) ...
-                     hex.index(hex.startIndex, offsetBy: $0 + 1)], radix: 16)
-        })
-        
-        p.writeValue(triggerData, for: char, type: .withoutResponse)
-        appendLog(.system, "Sent historical sync command [\(hex)]")
+
+        // Build 9-byte sync frame: 0xAA 0x10 0x00 [UInt32 LE timestamp] [CRC-16 LE]
+        var frame = [UInt8](repeating: 0, count: 9)
+        frame[0] = 0xAA
+        frame[1] = 0x10
+        frame[2] = 0x00
+
+        let ts = UInt32(Date().timeIntervalSince1970)
+        frame[3] = UInt8(ts & 0xFF)
+        frame[4] = UInt8((ts >> 8)  & 0xFF)
+        frame[5] = UInt8((ts >> 16) & 0xFF)
+        frame[6] = UInt8((ts >> 24) & 0xFF)
+
+        let crc = crc16(Array(frame[0..<7]))
+        frame[7] = UInt8(crc & 0xFF)
+        frame[8] = UInt8((crc >> 8) & 0xFF)
+
+        let hexStr = frame.map { String(format: "%02X", $0) }.joined(separator: " ")
+        p.writeValue(Data(frame), for: char, type: .withoutResponse)
+        appendLog(.system, "📡 Sent historical sync: \(hexStr)")
+    }
+
+    /// CRC-16/CCITT-FALSE — poly 0x1021, init 0xFFFF, no reflection
+    private func crc16(_ bytes: [UInt8]) -> UInt16 {
+        var crc: UInt16 = 0xFFFF
+        for byte in bytes {
+            crc ^= UInt16(byte) << 8
+            for _ in 0..<8 {
+                crc = (crc & 0x8000) != 0 ? (crc << 1) ^ 0x1021 : crc << 1
+            }
+        }
+        return crc
     }
 
     // MARK: - Helpers
@@ -207,16 +240,12 @@ extension BLEManager: CBPeripheralDelegate {
             if char.uuid == kManufacturer || char.uuid == kBattery {
                 peripheral.readValue(for: char)
             }
-            // Send "Start Activity" trigger to unlock the high-frequency sensor stream
             if char.uuid == kCmdToStrap {
                 cmdCharacteristic = char
-                let hex = "aa0800a8238c03017d5ec627"
-                let triggerData = Data(stride(from: 0, to: hex.count, by: 2).compactMap {
-                    UInt8(hex[hex.index(hex.startIndex, offsetBy: $0) ...
-                             hex.index(hex.startIndex, offsetBy: $0 + 1)], radix: 16)
-                })
-                peripheral.writeValue(triggerData, for: char, type: .withoutResponse)
-                appendLog(.system, "Sent trigger command to CMD_TO_STRAP")
+                appendLog(.system, "CMD_TO_STRAP ready — trigger deferred to scene phase")
+                // Live-stream trigger is sent by appDidBecomeActive(), NOT here,
+                // so backgrounded reconnects never force the strap into high-power mode.
+                sendLiveStreamTrigger()
             }
         }
     }
@@ -296,4 +325,35 @@ extension BLEManager: CBPeripheralDelegate {
     }
 
 
+}
+
+// MARK: - Scene Phase & BLE Command Writers
+extension BLEManager {
+
+    @objc private func appDidBecomeActive() {
+        sendLiveStreamTrigger()
+    }
+
+    @objc private func appDidEnterBackground() {
+        sendBackgroundRecordCommand()
+    }
+
+    private func sendLiveStreamTrigger() {
+        guard let p = whoopPeripheral,
+              let char = cmdCharacteristic,
+              p.state == .connected else { return }
+        let bytes: [UInt8] = [0xAA, 0x08, 0x00, 0xA8, 0x23, 0x8C, 0x03, 0x01, 0x7D, 0x5E, 0xC6, 0x27]
+        p.writeValue(Data(bytes), for: char, type: .withoutResponse)
+        appendLog(.system, "🟢 Foreground: sent live-stream trigger")
+    }
+
+    private func sendBackgroundRecordCommand() {
+        guard let p = whoopPeripheral,
+              let char = cmdCharacteristic,
+              p.state == .connected else { return }
+        // Stop Activity — reverts strap to low-power Record-and-Dump mode
+        let bytes: [UInt8] = [0xAA, 0x01, 0x00, 0x55]
+        p.writeValue(Data(bytes), for: char, type: .withoutResponse)
+        appendLog(.system, "🔴 Background: sent stop/record command")
+    }
 }

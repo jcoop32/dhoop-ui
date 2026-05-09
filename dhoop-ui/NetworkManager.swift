@@ -21,6 +21,28 @@ enum DhoopDefaults {
 struct LatestResponse: Decodable { let hr: [HRRecord] }
 struct HRRecord: Decodable { let heart_rate: Int }
 
+struct Baselines: Decodable {
+    let hrv_low: Double
+    let hrv_high: Double
+    let rhr_low: Double
+    let rhr_high: Double
+}
+
+struct DailyRecord: Decodable, Identifiable {
+    let date: String
+    let sleep_score: Int
+    let strain: Double
+    var id: String { date }
+
+    var formattedDate: String {
+        let iso = DateFormatter()
+        iso.dateFormat = "yyyy-MM-dd"
+        let display = DateFormatter()
+        display.dateFormat = "EEE, MMM d"
+        return iso.date(from: date).map { display.string(from: $0) } ?? date
+    }
+}
+
 // MARK: - NetworkManager
 final class NetworkManager {
 
@@ -146,5 +168,36 @@ final class NetworkManager {
         else { return nil }
 
         return response.hr.first?.heart_rate
+    }
+
+    // MARK: - History API
+
+    func fetchBaselines() async -> Baselines? {
+        guard let url = makeURL("/api/baselines") else { return nil }
+        guard let (data, _) = try? await URLSession.shared.data(for: makeGETRequest(url)) else { return nil }
+        return try? JSONDecoder().decode(Baselines.self, from: data)
+    }
+
+    func fetchHistory() async -> [DailyRecord] {
+        guard let url = makeURL("/api/history") else { return [] }
+        guard let (data, _) = try? await URLSession.shared.data(for: makeGETRequest(url)) else { return [] }
+        return (try? JSONDecoder().decode([DailyRecord].self, from: data)) ?? []
+    }
+
+    // MARK: - Private Helpers
+
+    private func makeURL(_ path: String) -> URL? {
+        let ip   = UserDefaults.standard.string(forKey: DhoopDefaults.targetIP)   ?? DhoopDefaults.defaultIP
+        let port = UserDefaults.standard.string(forKey: DhoopDefaults.targetPort) ?? DhoopDefaults.defaultPort
+        return URL(string: "http://\(ip):\(port)\(path)")
+    }
+
+    private func makeGETRequest(_ url: URL) -> URLRequest {
+        let key = UserDefaults.standard.string(forKey: DhoopDefaults.apiKey) ?? DhoopDefaults.defaultKey
+        var req = URLRequest(url: url)
+        req.httpMethod = "GET"
+        req.setValue(key, forHTTPHeaderField: "X-API-Key")
+        req.timeoutInterval = 5
+        return req
     }
 }
