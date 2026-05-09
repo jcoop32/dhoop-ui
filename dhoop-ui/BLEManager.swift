@@ -435,18 +435,15 @@ extension BLEManager: CBPeripheralDelegate {
 
         case kCmdFromStrap:
             let bytes = [UInt8](data)
-            // Look for GET_HELLO_HARVARD response (0x24) to command (0x23)
             if bytes.count >= 12, bytes[0] == 0xAA, bytes[4] == 0x24, bytes[6] == 0x23 {
                 let battRaw = UInt32(bytes[8]) | (UInt32(bytes[9]) << 8) | (UInt32(bytes[10]) << 16) | (UInt32(bytes[11]) << 24)
                 let pct = Int(Double(battRaw) / 10.0)
                 let clamped = max(0, min(100, pct))
-
-                DispatchQueue.main.async {
-                    self.batteryLevel = clamped
-                }
+                DispatchQueue.main.async { self.batteryLevel = clamped }
                 network.sendBattery(level: clamped)
                 appendLog(.system, "🔋 True Strap Battery: \(clamped)%")
             }
+            reassembler.append(bytes)
 
         case kManufacturer:
             if let name = String(data: data, encoding: .utf8) {
@@ -455,20 +452,9 @@ extension BLEManager: CBPeripheralDelegate {
             }
 
         case kWhoopEvents:
-            // Format as a continuous hex string (no spaces) for the backend
-            let dataHex = data.map { String(format: "%02X", $0) }.joined()
-
-            // Immediately forward event packets to the backend
-            network.ingest(hexPayload: dataHex)
-
-            // Decode for UI
-            let packet = SensorPacket(hex: dataHex)
-            DispatchQueue.main.async {
-                if self.sensorPackets.count >= 300 { self.sensorPackets.removeFirst() }
-                self.sensorPackets.append(packet)
-            }
-
-            appendLog(.data, "EVENT → \(dataHex.prefix(20))… (\(data.count)B)")
+            let bytes = [UInt8](data)
+            appendLog(.data, "EVENT → \(bytes.count)B")
+            reassembler.append(bytes) // Feed to reassembler so it goes to the backend!
 
         case kWhoopData:
             // DATA_FROM_STRAP — high-frequency accel + PPG firehose.
