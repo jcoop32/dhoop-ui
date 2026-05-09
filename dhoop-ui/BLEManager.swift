@@ -10,10 +10,11 @@ import UIKit
 
 // Known Whoop characteristic UUIDs
 private let kCmdToStrap   = CBUUID(string: "61080002-8D6D-82B8-614A-1C8CB0F8DCC6") // CMD_TO_STRAP     (write trigger)
+private let kCmdFromStrap = CBUUID(string: "61080003-8D6D-82B8-614A-1C8CB0F8DCC6") // CMD_FROM_STRAP   (response channel)
 private let kWhoopEvents  = CBUUID(string: "61080004-8D6D-82B8-614A-1C8CB0F8DCC6") // EVENTS_FROM_STRAP (low-freq)
 private let kWhoopData    = CBUUID(string: "61080005-8D6D-82B8-614A-1C8CB0F8DCC6") // DATA_FROM_STRAP  (accel + PPG firehose)
 private let kHeartRate    = CBUUID(string: "2A37")
-private let kBattery      = CBUUID(string: "2A19")
+private let kBattery      = CBUUID(string: "2A19")  // Standard battery — returns fake 100%; ignored in favour of 0x24 response
 private let kManufacturer = CBUUID(string: "2A29")
 
 // MARK: - FrameReassembler
@@ -428,10 +429,24 @@ extension BLEManager: CBPeripheralDelegate {
             }
 
         case kBattery:
-            let level = Int(data[0])
-            batteryLevel = level
-            appendLog(.data, "🔋 Battery: \(level)%")
-            network.sendBattery(level: level)
+            // Ignored: Standard 2A19 characteristic returns fake 100%.
+            // True strap battery is obtained via the 0x23/0x24 command exchange on kCmdFromStrap.
+            break
+
+        case kCmdFromStrap:
+            let bytes = [UInt8](data)
+            // Look for GET_HELLO_HARVARD response (0x24) to command (0x23)
+            if bytes.count >= 12, bytes[0] == 0xAA, bytes[4] == 0x24, bytes[6] == 0x23 {
+                let battRaw = UInt32(bytes[8]) | (UInt32(bytes[9]) << 8) | (UInt32(bytes[10]) << 16) | (UInt32(bytes[11]) << 24)
+                let pct = Int(Double(battRaw) / 10.0)
+                let clamped = max(0, min(100, pct))
+
+                DispatchQueue.main.async {
+                    self.batteryLevel = clamped
+                }
+                network.sendBattery(level: clamped)
+                appendLog(.system, "🔋 True Strap Battery: \(clamped)%")
+            }
 
         case kManufacturer:
             if let name = String(data: data, encoding: .utf8) {
@@ -508,13 +523,12 @@ extension BLEManager {
         sendBackgroundRecordCommand()
     }
 
-    /// Sends the four Gen4 stream-enable commands with the delays required by
-    /// the Whoop firmware state machine (ported from whoopsie Dart reference):
-    ///
-    ///   seq=0xA0  cmd=0x03  payload=[0x01]  → Toggle HR          (wait 50ms)
-    ///   seq=0xA1  cmd=0x3F  payload=[0x01]  → Send R10 IMU       (wait 50ms)
-    ///   seq=0xA2  cmd=0x9A  payload=[0x01]  → Toggle Optical R21 (wait 100ms)
-    ///   seq=0xA3  cmd=0x6C  payload=[0x01]  → SpO2 enable
+    /// Sends five Gen4 commands:
+    ///   seq=0xA0  cmd=0x23  payload=[]     → GET_HELLO_HARVARD (request true battery)
+    ///   seq=0xA1  cmd=0x03  payload=[0x01] → Toggle HR          (+300ms)
+    ///   seq=0xA2  cmd=0x3F  payload=[0x01] → Send R10 IMU       (+600ms)
+    ///   seq=0xA3  cmd=0x9A  payload=[0x01] → Toggle Optical R21 (+900ms)
+    ///   seq=0xA4  cmd=0x6C  payload=[0x01] → SpO2 enable        (+1200ms)
     private func sendLiveStreamTrigger() {
         guard let p = whoopPeripheral,
               let char = cmdCharacteristic,
@@ -531,25 +545,26 @@ extension BLEManager {
             seq &+= 1
         }
 
-        // Packet 1: Toggle HR — fire immediately.
-        send(cmd: 0x03, payload: [0x01])
+        // Cmd 0: GET_HELLO_HARVARD — request true strap battery; response arrives on kCmdFromStrap.
+        send(cmd: 0x23, payload: [])
 
-        // Packet 2: Send R10 IMU — 300ms after packet 1.
-        // The strap firmware state machine needs ~250ms to fully ACK cmd 0x03
-        // before it will accept the 0x3F (IMU) command without collision.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.30) { [weak self] in
+        // Cmd 1: Toggle HR
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+            guard let self, p.state == .connected else { return }
+            send(cmd: 0x03, payload: [0x01])
+        }
+        // Cmd 2: Send R10 IMU
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
             guard let self, p.state == .connected else { return }
             send(cmd: 0x3F, payload: [0x01])
         }
-
-        // Packet 3: Toggle Optical R21 (SpO2 sensor) — 600ms after packet 1.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.60) { [weak self] in
+        // Cmd 3: Toggle Optical R21
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) { [weak self] in
             guard let self, p.state == .connected else { return }
             send(cmd: 0x9A, payload: [0x01])
         }
-
-        // Packet 4: SpO2 enable — 900ms after packet 1.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.90) { [weak self] in
+        // Cmd 4: SpO2 enable
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in
             guard let self, p.state == .connected else { return }
             send(cmd: 0x6C, payload: [0x01])
             self.appendLog(.system, "🟢 Live-stream sequence complete")
