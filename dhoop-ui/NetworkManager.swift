@@ -35,6 +35,8 @@ struct DailyRecord: Decodable, Identifiable {
     let date: String
     let sleep_score: Int
     let strain: Double
+    let resting_hr: Double?
+    let hrv_rmssd: Double?
     var id: String { date }
 
     var formattedDate: String {
@@ -43,6 +45,14 @@ struct DailyRecord: Decodable, Identifiable {
         let display = DateFormatter()
         display.dateFormat = "EEE, MMM d"
         return iso.date(from: date).map { display.string(from: $0) } ?? date
+    }
+    
+    var isToday: Bool {
+        let iso = DateFormatter()
+        iso.dateFormat = "yyyy-MM-dd"
+        iso.timeZone = TimeZone.current
+        let todayStr = iso.string(from: Date())
+        return date == todayStr
     }
 }
 
@@ -171,6 +181,13 @@ final class NetworkManager {
         else { return nil }
 
         return response.hr.first?.heart_rate
+    }
+
+    /// Triggers the backend algorithms to calculate strain and sleep for the current day
+    func calculateTodayMetrics() async {
+        guard let strainURL = makeURL("/api/strain"), let sleepURL = makeURL("/api/sleep") else { return }
+        _ = try? await URLSession.shared.data(for: makeGETRequest(strainURL))
+        _ = try? await URLSession.shared.data(for: makeGETRequest(sleepURL))
     }
 
     // MARK: - History API

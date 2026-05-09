@@ -22,11 +22,14 @@ final class HistoryViewModel: ObservableObject {
         isLoading    = true
         errorMessage = nil
         isEmpty      = false
+        
+        await network.calculateTodayMetrics()
+        
         async let b  = network.fetchBaselines()
         async let r  = network.fetchHistory()
         let (fetchedBaselines, fetchedRecords) = await (b, r)
         baselines = fetchedBaselines
-        records   = fetchedRecords
+        records   = fetchedRecords.reversed()
 
         if fetchedBaselines == nil && fetchedRecords.isEmpty {
             // Could not reach server at all
@@ -57,11 +60,15 @@ struct HistoryView: View {
                 } else if vm.isEmpty {
                     EmptyHistoryView()
                 } else {
+                    if let today = vm.records.first, today.isToday {
+                        TodayCard(record: today)
+                    }
                     if let b = vm.baselines, b.hasData {
                         NormalRangeCard(baselines: b)
                     }
-                    if !vm.records.isEmpty {
-                        DailyHistorySection(records: vm.records)
+                    let pastRecords = vm.records.filter { !$0.isToday }
+                    if !pastRecords.isEmpty {
+                        DailyHistorySection(records: pastRecords)
                     }
                 }
             }
@@ -179,6 +186,76 @@ struct RangeMetricRow: View {
                 withAnimation(.easeOut(duration: 0.9)) { barProgress = 1 }
             }
         }
+    }
+}
+
+// MARK: - Today Card
+
+struct TodayCard: View {
+    let record: DailyRecord
+
+    var body: some View {
+        VStack(spacing: 24) {
+            HStack(alignment: .top, spacing: 20) {
+                // Strain Ring
+                VStack {
+                    ZStack {
+                        Circle().stroke(Color.white.opacity(0.1), lineWidth: 8)
+                        Circle()
+                            .trim(from: 0, to: min(record.strain / 21.0, 1.0))
+                            .stroke(Color.blue, style: StrokeStyle(lineWidth: 8, lineCap: .round))
+                            .rotationEffect(.degrees(-90))
+                        Text(String(format: "%.1f", record.strain))
+                            .font(.system(size: 32, weight: .bold, design: .default))
+                            .foregroundColor(.white)
+                    }
+                    .frame(width: 120, height: 120)
+                    Text("STRAIN")
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundColor(.blue)
+                }
+
+                // Sleep Ring
+                VStack {
+                    ZStack {
+                        Circle().stroke(Color.white.opacity(0.1), lineWidth: 8)
+                        Circle()
+                            .trim(from: 0, to: Double(record.sleep_score) / 100.0)
+                            .stroke(Color.cyan, style: StrokeStyle(lineWidth: 8, lineCap: .round))
+                            .rotationEffect(.degrees(-90))
+                        Text("\(record.sleep_score)%")
+                            .font(.system(size: 32, weight: .bold, design: .default))
+                            .foregroundColor(.white)
+                    }
+                    .frame(width: 120, height: 120)
+                    Text("SLEEP")
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundColor(.cyan)
+                }
+            }
+            .padding(.top, 10)
+
+            // Recovery/HRV/RHR Metrics Below
+            HStack(spacing: 12) {
+                metricBox(title: "HRV", value: "\(Int(record.hrv_rmssd ?? 0))", unit: "ms", color: .cyan)
+                metricBox(title: "RHR", value: "\(Int(record.resting_hr ?? 0))", unit: "bpm", color: .red)
+            }
+        }
+        .padding(.vertical, 20)
+    }
+
+    func metricBox(title: String, value: String, unit: String, color: Color) -> some View {
+        VStack(spacing: 2) {
+            Text(title).font(.system(size: 12, weight: .bold)).foregroundColor(color)
+            HStack(alignment: .lastTextBaseline, spacing: 2) {
+                Text(value).font(.system(size: 24, weight: .bold)).foregroundColor(.white)
+                Text(unit).font(.system(size: 12, weight: .semibold)).foregroundColor(.white.opacity(0.5))
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 12)
+        .background(Color.white.opacity(0.05))
+        .cornerRadius(12)
     }
 }
 

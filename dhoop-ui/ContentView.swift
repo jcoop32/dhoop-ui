@@ -12,55 +12,70 @@ struct ContentView: View {
     @State private var pulse = false
 
     var body: some View {
-        ZStack {
-            Color(red: 0.05, green: 0.05, blue: 0.08).ignoresSafeArea()
+        ZStack(alignment: .bottom) {
+            Color.black.ignoresSafeArea()
+
             VStack(spacing: 0) {
-                headerView
-                if ble.connectionStatus.hasPrefix("Connected") {
-                    heroHRCard
-                    statsBar
+                whoopHeaderView
+                
+                ZStack {
+                    if selectedTab == 0 {
+                        HistoryView() // The "Home" Dashboard
+                    } else if selectedTab == 1 {
+                        liveHRView
+                    } else if selectedTab == 2 {
+                        logScrollView
+                    } else if selectedTab == 3 {
+                        SettingsView()
+                    }
                 }
-                controlRow
-                Divider().background(Color.white.opacity(0.08))
-                tabStrip
-                tabContent
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
+            .padding(.bottom, 60) // Make room for tab bar
+
+            whoopTabBar
         }
         .preferredColorScheme(.dark)
     }
 
-    // MARK: Header
-    private var headerView: some View {
+    private var whoopHeaderView: some View {
         HStack {
-            Image(systemName: "waveform.path.ecg.rectangle")
-                .font(.title2)
-                .foregroundStyle(LinearGradient(colors: [.cyan, .blue],
-                                                startPoint: .topLeading,
-                                                endPoint: .bottomTrailing))
-            VStack(alignment: .leading, spacing: 2) {
-                Text("dhoop")
-                    .font(.system(size: 22, weight: .bold, design: .rounded))
-                    .foregroundColor(.white)
-                Text("Whoop 4.0 BLE Bridge")
-                    .font(.caption).foregroundColor(.white.opacity(0.45))
-            }
+            Text(Date().formatted(.dateTime.weekday(.wide).month().day()).uppercased())
+                .font(.system(size: 14, weight: .bold, design: .default))
+                .foregroundColor(.white)
+            
             Spacer()
-            if !ble.logEntries.isEmpty {
-                ShareLink(item: ble.exportText(),
-                          subject: Text("dhoop BLE Log"),
-                          message: Text("Raw BLE scan — \(ble.logEntries.count) entries")) {
-                    Image(systemName: "square.and.arrow.up")
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundColor(.cyan)
-                        .padding(8)
-                        .background(Color.cyan.opacity(0.12))
-                        .clipShape(Circle())
+            
+            // Connection Status Dot
+            Circle()
+                .fill(statusColor)
+                .frame(width: 8, height: 8)
+                .shadow(color: statusColor.opacity(0.8), radius: 4)
+            
+            // Battery
+            if let battery = ble.batteryLevel {
+                HStack(spacing: 2) {
+                    Image(systemName: "battery.100")
+                        .font(.system(size: 12))
+                    Text("\(battery)%")
+                        .font(.system(size: 12, weight: .bold))
                 }
+                .foregroundColor(battery > 20 ? .green : .red)
             }
         }
         .padding(.horizontal, 20)
-        .padding(.top, 16)
+        .padding(.top, 10)
         .padding(.bottom, 10)
+    }
+
+    private var liveHRView: some View {
+        VStack(spacing: 20) {
+            heroHRCard
+            statsBar
+            controlRow
+            Spacer()
+        }
+        .padding(.top, 20)
     }
 
     // MARK: Heart Rate Hero Card
@@ -220,45 +235,31 @@ struct ContentView: View {
     }
 
     // MARK: Tab Strip
-    private var tabStrip: some View {
-        HStack(spacing: 0) {
-            tabButton("Log",      index: 0, icon: "list.bullet")
-            tabButton("Sensors",  index: 1, icon: "waveform")
-            tabButton("Settings", index: 2, icon: "gearshape")
-            tabButton("History",  index: 3, icon: "chart.bar.xaxis")
+    private var whoopTabBar: some View {
+        VStack(spacing: 0) {
+            Divider().background(Color.white.opacity(0.1))
+            HStack(spacing: 0) {
+                tabButton("HOME",     index: 0, icon: "house.fill")
+                tabButton("LIVE",     index: 1, icon: "heart.fill")
+                tabButton("LOGS",     index: 2, icon: "terminal.fill")
+                tabButton("SETTINGS", index: 3, icon: "gearshape.fill")
+            }
+            .padding(.top, 12)
+            .padding(.bottom, 25) // Safe area spacing
+            .background(Color(red: 0.05, green: 0.05, blue: 0.05).ignoresSafeArea())
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 8)
     }
 
     private func tabButton(_ title: String, index: Int, icon: String) -> some View {
-        Button(action: { withAnimation { selectedTab = index } }) {
-            HStack(spacing: 5) {
-                Image(systemName: icon).font(.system(size: 12, weight: .semibold))
-                Text(title).font(.system(size: 13, weight: .semibold))
+        Button(action: { selectedTab = index }) {
+            VStack(spacing: 6) {
+                Image(systemName: icon)
+                    .font(.system(size: 20))
+                Text(title)
+                    .font(.system(size: 10, weight: .bold))
             }
-            .foregroundColor(selectedTab == index ? .black : .white.opacity(0.45))
-            .padding(.vertical, 7).frame(maxWidth: .infinity)
-            .background(selectedTab == index
-                ? LinearGradient(colors: [.cyan, Color(red: 0.2, green: 0.5, blue: 1)],
-                                 startPoint: .leading, endPoint: .trailing)
-                : LinearGradient(colors: [Color.white.opacity(0.05)], startPoint: .leading, endPoint: .trailing))
-            .clipShape(Capsule())
-        }
-        .padding(.horizontal, 4)
-    }
-
-    // MARK: Tab Content
-    @ViewBuilder
-    private var tabContent: some View {
-        if selectedTab == 0 {
-            logScrollView
-        } else if selectedTab == 1 {
-            sensorScrollView
-        } else if selectedTab == 2 {
-            SettingsView()
-        } else {
-            HistoryView()
+            .foregroundColor(selectedTab == index ? .white : .white.opacity(0.35))
+            .frame(maxWidth: .infinity)
         }
     }
 
