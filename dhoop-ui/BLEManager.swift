@@ -16,6 +16,114 @@ private let kHeartRate    = CBUUID(string: "2A37")
 private let kBattery      = CBUUID(string: "2A19")
 private let kManufacturer = CBUUID(string: "2A29")
 
+// MARK: - FrameReassembler
+/// Buffers raw BLE fragments from DATA_FROM_STRAP and reconstructs complete Gen4 frames.
+///
+/// Gen4 frame layout:
+///   [0]    0xAA  — magic sync byte
+///   [1..2] UInt16 LE — total body length (everything after the 4-byte header)
+///   [3]    CRC-8 of bytes [1..2]
+///   [4 ..  3+length] body
+///
+/// A frame is "complete" once buffer.count >= length + 4.
+final class FrameReassembler {
+
+    private var buffer: [UInt8] = []
+
+    /// Called when a complete frame has been extracted.
+    var onFrame: ((_ hexPayload: String) -> Void)?
+
+    /// Feed new bytes from a BLE notification chunk.
+    func append(_ bytes: [UInt8]) {
+        buffer.append(contentsOf: bytes)
+        consumeFrames()
+    }
+
+    private func consumeFrames() {
+        // Keep consuming until we can no longer extract a complete frame.
+        while true {
+            // Scan forward to find the 0xAA sync byte.
+            guard let syncIdx = buffer.firstIndex(of: 0xAA) else {
+                buffer.removeAll()
+                return
+            }
+            if syncIdx > 0 {
+                // Drop any leading garbage bytes before the sync marker.
+                buffer.removeFirst(syncIdx)
+            }
+
+            // Need at least 4 bytes for the header (magic + 2-byte length + crc8).
+            guard buffer.count >= 4 else { return }
+
+            // Read body length as Little-Endian UInt16.
+            let bodyLength = Int(buffer[1]) | (Int(buffer[2]) << 8)
+            let totalFrame = 4 + bodyLength   // header(4) + body
+
+            guard buffer.count >= totalFrame else { return }  // wait for more data
+
+            // Extract the complete frame.
+            let frame = Array(buffer.prefix(totalFrame))
+            buffer.removeFirst(totalFrame)
+
+            // Convert to hex string and fire callback.
+            let hex = frame.map { String(format: "%02X", $0) }.joined()
+            onFrame?(hex)
+        }
+    }
+
+    /// Reset internal buffer (e.g., on disconnect).
+    func reset() { buffer.removeAll() }
+}
+
+// MARK: - CRC Engines (ported from whoopsie Dart)
+
+/// CRC-8 (Maxim/Dallas, poly 0x31, init 0x00, no reflection).
+/// Used to checksum the 2-byte length field in the Gen4 packet header.
+private let crc8Table: [UInt8] = {
+    var table = [UInt8](repeating: 0, count: 256)
+    for i in 0..<256 {
+        var crc = UInt8(i)
+        for _ in 0..<8 {
+            crc = (crc & 0x80) != 0 ? (crc << 1) ^ 0x31 : crc << 1
+        }
+        table[i] = crc
+    }
+    return table
+}()
+
+private func crc8(_ bytes: [UInt8]) -> UInt8 {
+    var crc: UInt8 = 0x00
+    for byte in bytes {
+        crc = crc8Table[Int(crc ^ byte)]
+    }
+    return crc
+}
+
+/// CRC-32 (IEEE 802.3, poly 0xEDB88320 reflected, init 0xFFFFFFFF).
+/// Used as the 4-byte trailing checksum of the full Gen4 packet.
+private let crc32Table: [UInt32] = {
+    var table = [UInt32](repeating: 0, count: 256)
+    for i in 0..<256 {
+        var crc = UInt32(i)
+        for _ in 0..<8 {
+            crc = (crc & 1) != 0 ? (crc >> 1) ^ 0xEDB88320 : crc >> 1
+        }
+        table[i] = crc
+    }
+    return table
+}()
+
+private func crc32(_ bytes: [UInt8]) -> UInt32 {
+    var crc: UInt32 = 0xFFFFFFFF
+    for byte in bytes {
+        let idx = Int((crc ^ UInt32(byte)) & 0xFF)
+        crc = (crc >> 8) ^ crc32Table[idx]
+    }
+    return crc ^ 0xFFFFFFFF
+}
+
+// MARK: - BLEManager
+
 final class BLEManager: NSObject, ObservableObject {
 
     // MARK: - Published state
@@ -36,6 +144,9 @@ final class BLEManager: NSObject, ObservableObject {
     private var cmdCharacteristic : CBCharacteristic?
     private var pingTimer         : Timer?
 
+    // MARK: - Frame reassembly
+    private let reassembler = FrameReassembler()
+
     // MARK: - Networking
     private let network = NetworkManager()
 
@@ -43,6 +154,14 @@ final class BLEManager: NSObject, ObservableObject {
     override init() {
         super.init()
         centralManager = CBCentralManager(delegate: self, queue: nil)
+
+        // Wire up reassembler → ingest pipeline
+        reassembler.onFrame = { [weak self] hexPayload in
+            guard let self else { return }
+            self.network.ingest(hexPayload: hexPayload)
+            self.appendLog(.data, "🧩 Frame → \(hexPayload.prefix(32))…")
+        }
+
         NotificationCenter.default.addObserver(
             self, selector: #selector(appDidBecomeActive),
             name: UIApplication.didBecomeActiveNotification, object: nil)
@@ -65,6 +184,7 @@ final class BLEManager: NSObject, ObservableObject {
         sensorPackets.removeAll()
         heartRate    = nil
         batteryLevel = nil
+        reassembler.reset()
         connectionStatus = "Scanning…"
         isScanning       = true
         appendLog(.system, "Scanning for Whoop…")
@@ -122,6 +242,53 @@ final class BLEManager: NSObject, ObservableObject {
         appendLog(.system, "📡 Sent historical sync: \(hexStr)")
     }
 
+    // MARK: - Gen4 Packet Builder
+    /// Builds a complete Gen4 command packet matching the whoopsie wire format:
+    ///   AA [lenLo] [lenHi] [crc8(len)] 23 [seq] [cmd] [payload] [zero-pad to 8 body bytes] [crc32 LE 4 bytes]
+    ///
+    /// - Parameters:
+    ///   - seq: Sequence byte (e.g. 0xA0, increments per command).
+    ///   - cmd: Command opcode (e.g. 0x03 = Toggle HR).
+    ///   - payload: Command-specific payload bytes.
+    /// - Returns: Fully framed `Data` ready for `.writeValue(_:for:type:)`.
+    func buildPacket(seq: UInt8, cmd: UInt8, payload: [UInt8]) -> Data {
+        // Body = [0x23, seq, cmd] + payload, zero-padded to exactly 8 bytes.
+        var body = [UInt8](repeating: 0, count: 8)
+        body[0] = 0x23
+        body[1] = seq
+        body[2] = cmd
+        for (i, b) in payload.prefix(5).enumerated() {
+            body[3 + i] = b
+        }
+
+        // Length field = number of body bytes (always 8 here).
+        let bodyLen = UInt16(body.count)   // 0x0008
+        let lenLo   = UInt8(bodyLen & 0xFF)
+        let lenHi   = UInt8((bodyLen >> 8) & 0xFF)
+
+        // CRC-8 covers only the two length bytes.
+        let headerCRC = crc8([lenLo, lenHi])
+
+        // Assemble header + body (before CRC-32 trailer).
+        var packet: [UInt8] = [0xAA, lenLo, lenHi, headerCRC] + body
+
+        // CRC-32 covers the entire packet so far.
+        let checksum = crc32(packet)
+        packet.append(UInt8(checksum & 0xFF))
+        packet.append(UInt8((checksum >> 8)  & 0xFF))
+        packet.append(UInt8((checksum >> 16) & 0xFF))
+        packet.append(UInt8((checksum >> 24) & 0xFF))
+
+        return Data(packet)
+    }
+
+    // MARK: - Helpers
+    private func appendLog(_ source: LogSource, _ detail: String) {
+        let entry = LogEntry(source: source, detail: detail)
+        logEntries.append(entry)
+        print("[\(source.rawValue)] \(detail)")
+    }
+
     /// CRC-16/CCITT-FALSE — poly 0x1021, init 0xFFFF, no reflection
     private func crc16(_ bytes: [UInt8]) -> UInt16 {
         var crc: UInt16 = 0xFFFF
@@ -132,13 +299,6 @@ final class BLEManager: NSObject, ObservableObject {
             }
         }
         return crc
-    }
-
-    // MARK: - Helpers
-    private func appendLog(_ source: LogSource, _ detail: String) {
-        let entry = LogEntry(source: source, detail: detail)
-        logEntries.append(entry)
-        print("[\(source.rawValue)] \(detail)")
     }
 }
 
@@ -209,6 +369,7 @@ extension BLEManager: CBCentralManagerDelegate {
         cmdCharacteristic = nil
         heartRate        = nil
         backendHR        = nil
+        reassembler.reset()
         
         // Stop pinging backend
         pingTimer?.invalidate()
@@ -290,14 +451,24 @@ extension BLEManager: CBPeripheralDelegate {
             }
 
         case kWhoopData:
-            // DATA_FROM_STRAP — high-frequency accel + PPG firehose; log + forward to ingest
+            // DATA_FROM_STRAP — high-frequency accel + PPG firehose.
+            // BLE MTU (~185 bytes) means large packets (e.g. 1,300-byte R10 IMU)
+            // arrive as fragments. Feed each chunk into the FrameReassembler;
+            // onFrame fires only when a complete Gen4 frame has been buffered.
+            let bytes = [UInt8](data)
+
+            // Also attempt immediate SensorPacket decode for live UI metrics.
             if let packet = SensorPacket(data: data) {
                 if sensorPackets.count >= 300 { sensorPackets.removeFirst() }
                 sensorPackets.append(packet)
             }
-            let dataHex = data.map { String(format: "%02X", $0) }.joined()
-            appendLog(.data, "\(characteristic.uuid.uuidString)  →  \(dataHex)")
-            network.ingest(hexPayload: dataHex)
+
+            // Log the raw chunk (abbreviated so logs stay readable).
+            let chunkHex = bytes.prefix(16).map { String(format: "%02X", $0) }.joined()
+            appendLog(.data, "\(characteristic.uuid.uuidString)  →  \(chunkHex)… (\(bytes.count)B)")
+
+            // Feed into reassembler — ingest fires on complete frame via onFrame closure.
+            reassembler.append(bytes)
 
         default:
             let hex = data.map { String(format: "%02X", $0) }.joined(separator: " ")
@@ -338,13 +509,50 @@ extension BLEManager {
         sendBackgroundRecordCommand()
     }
 
+    /// Sends the four Gen4 stream-enable commands with the delays required by
+    /// the Whoop firmware state machine (ported from whoopsie Dart reference):
+    ///
+    ///   seq=0xA0  cmd=0x03  payload=[0x01]  → Toggle HR          (wait 50ms)
+    ///   seq=0xA1  cmd=0x3F  payload=[0x01]  → Send R10 IMU       (wait 50ms)
+    ///   seq=0xA2  cmd=0x9A  payload=[0x01]  → Toggle Optical R21 (wait 100ms)
+    ///   seq=0xA3  cmd=0x6C  payload=[0x01]  → SpO2 enable
     private func sendLiveStreamTrigger() {
         guard let p = whoopPeripheral,
               let char = cmdCharacteristic,
               p.state == .connected else { return }
-        let bytes: [UInt8] = [0xAA, 0x08, 0x00, 0xA8, 0x23, 0x8C, 0x03, 0x01, 0x7D, 0x5E, 0xC6, 0x27]
-        p.writeValue(Data(bytes), for: char, type: .withoutResponse)
-        appendLog(.system, "🟢 Foreground: sent live-stream trigger")
+
+        var seq: UInt8 = 0xA0
+
+        // Helper: write a packet immediately and bump the sequence counter.
+        func send(cmd: UInt8, payload: [UInt8]) {
+            let pkt = buildPacket(seq: seq, cmd: cmd, payload: payload)
+            p.writeValue(pkt, for: char, type: .withoutResponse)
+            let hex = pkt.map { String(format: "%02X", $0) }.joined()
+            appendLog(.system, "📤 cmd=0x\(String(format: "%02X", cmd)) seq=0x\(String(format: "%02X", seq)) → \(hex)")
+            seq &+= 1
+        }
+
+        // Packet 1: Toggle HR — fire immediately.
+        send(cmd: 0x03, payload: [0x01])
+
+        // Packet 2: Send R10 IMU — 50ms after packet 1.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+            guard let self, p.state == .connected else { return }
+            send(cmd: 0x3F, payload: [0x01])
+        }
+
+        // Packet 3: Toggle Optical R21 (SpO2 sensor) — 100ms after packet 1.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.10) { [weak self] in
+            guard let self, p.state == .connected else { return }
+            send(cmd: 0x9A, payload: [0x01])
+        }
+
+        // Packet 4: SpO2 enable — 200ms after packet 1.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.20) { [weak self] in
+            guard let self, p.state == .connected else { return }
+            send(cmd: 0x6C, payload: [0x01])
+            self.appendLog(.system, "🟢 Live-stream sequence complete")
+        }
     }
 
     private func sendBackgroundRecordCommand() {
