@@ -225,6 +225,19 @@ final class BLEManager: NSObject, ObservableObject {
 
             // 0x2F = HISTORICAL_DATA — forward to backend exactly like live data
             // 0x2B / 0x28 = live realtime data — forward to backend
+            
+            // 0x30 = EVENT
+            if pktType == 0x30 {
+                let eventType = frameBytes.count > 6 ? frameBytes[6] : 0
+                if eventType == 14 {
+                    self.appendLog(.system, "👋 DOUBLE TAP DETECTED — triggered action!")
+                } else if eventType == 9 {
+                    self.appendLog(.system, "⌚ BAND REMOVED FROM WRIST")
+                } else if eventType == 10 {
+                    self.appendLog(.system, "⌚ BAND PLACED ON WRIST")
+                }
+            }
+
             self.network.ingest(hexPayload: hexPayload)
             self.appendLog(.data, "🧩 Frame[0x\(String(format:"%02X",pktType))] → \(hexPayload.prefix(32))…")
 
