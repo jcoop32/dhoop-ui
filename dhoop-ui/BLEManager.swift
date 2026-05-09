@@ -55,6 +55,15 @@ final class FrameReassembler {
             // Need at least 4 bytes for the header (magic + 2-byte length + crc8).
             guard buffer.count >= 4 else { return }
 
+            // Validate the header CRC-8 over the two length bytes.
+            // If it fails the 0xAA we found is not a real frame start — pop it and
+            // keep scanning so we don't trust a garbage length value.
+            let expectedHeaderCRC = crc8([buffer[1], buffer[2]])
+            guard buffer[3] == expectedHeaderCRC else {
+                buffer.removeFirst()   // discard the false sync byte
+                continue               // re-scan from the new head
+            }
+
             // Read body length as Little-Endian UInt16.
             let bodyLength = Int(buffer[1]) | (Int(buffer[2]) << 8)
             let totalFrame = 4 + bodyLength   // header(4) + body
@@ -515,20 +524,22 @@ extension BLEManager {
         // Packet 1: Toggle HR — fire immediately.
         send(cmd: 0x03, payload: [0x01])
 
-        // Packet 2: Send R10 IMU — 50ms after packet 1.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+        // Packet 2: Send R10 IMU — 300ms after packet 1.
+        // The strap firmware state machine needs ~250ms to fully ACK cmd 0x03
+        // before it will accept the 0x3F (IMU) command without collision.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.30) { [weak self] in
             guard let self, p.state == .connected else { return }
             send(cmd: 0x3F, payload: [0x01])
         }
 
-        // Packet 3: Toggle Optical R21 (SpO2 sensor) — 100ms after packet 1.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.10) { [weak self] in
+        // Packet 3: Toggle Optical R21 (SpO2 sensor) — 600ms after packet 1.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.60) { [weak self] in
             guard let self, p.state == .connected else { return }
             send(cmd: 0x9A, payload: [0x01])
         }
 
-        // Packet 4: SpO2 enable — 200ms after packet 1.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.20) { [weak self] in
+        // Packet 4: SpO2 enable — 900ms after packet 1.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.90) { [weak self] in
             guard let self, p.state == .connected else { return }
             send(cmd: 0x6C, payload: [0x01])
             self.appendLog(.system, "🟢 Live-stream sequence complete")
