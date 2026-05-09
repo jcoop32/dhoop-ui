@@ -435,7 +435,8 @@ extension BLEManager: CBPeripheralDelegate {
 
         case kCmdFromStrap:
             let bytes = [UInt8](data)
-            if bytes.count >= 12, bytes[0] == 0xAA, bytes[4] == 0x24, bytes[6] == 0x23 {
+            // Gen4 response layout: AA lenLo lenHi crc8 | 0x23(inner marker) seq 0x24(cmd) ... batteryLE32
+            if bytes.count >= 12, bytes[0] == 0xAA, bytes[4] == 0x23, bytes[6] == 0x24 {
                 let battRaw = UInt32(bytes[8]) | (UInt32(bytes[9]) << 8) | (UInt32(bytes[10]) << 16) | (UInt32(bytes[11]) << 24)
                 let pct = Int(Double(battRaw) / 10.0)
                 let clamped = max(0, min(100, pct))
@@ -454,7 +455,7 @@ extension BLEManager: CBPeripheralDelegate {
         case kWhoopEvents:
             let bytes = [UInt8](data)
             appendLog(.data, "EVENT → \(bytes.count)B")
-            reassembler.append(bytes) // Feed to reassembler so it goes to the backend!
+            reassembler.append(bytes) // Forward to reassembler → backend ingest
 
         case kWhoopData:
             // DATA_FROM_STRAP — high-frequency accel + PPG firehose.
