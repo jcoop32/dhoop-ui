@@ -21,6 +21,16 @@ enum DhoopDefaults {
 struct LatestResponse: Decodable { let hr: [HRRecord] }
 struct HRRecord: Decodable { let heart_rate: Int }
 
+struct DailyOutlook: Decodable {
+    let status: String?
+    let recovery: Int?
+    let zone: String?
+    let advice: String?
+    let previous_strain: Double?
+    struct StrainTarget: Decodable { let min: Double; let max: Double }
+    let strain_target: StrainTarget?
+}
+
 struct Baselines: Decodable {
     let status: String?
     let hrv_low: Double
@@ -40,6 +50,7 @@ struct DailyRecord: Decodable, Identifiable {
     let sleep_duration_min: Double?
     let time_in_bed_min: Double?
     let disturbances: Int?
+    let recovery_score: Double?   // from /api/recovery, persisted via _save_daily_summary
     var id: String { date }
 
     var formattedDate: String {
@@ -186,11 +197,20 @@ final class NetworkManager {
         return response.hr.first?.heart_rate
     }
 
-    /// Triggers the backend algorithms to calculate strain and sleep for the current day
+    /// Triggers the backend algorithms to calculate strain, sleep, and recovery for the current day
     func calculateTodayMetrics() async {
-        guard let strainURL = makeURL("/api/strain"), let sleepURL = makeURL("/api/sleep") else { return }
+        guard let strainURL = makeURL("/api/strain"),
+              let sleepURL  = makeURL("/api/sleep"),
+              let recURL    = makeURL("/api/recovery") else { return }
         _ = try? await URLSession.shared.data(for: makeGETRequest(strainURL))
         _ = try? await URLSession.shared.data(for: makeGETRequest(sleepURL))
+        _ = try? await URLSession.shared.data(for: makeGETRequest(recURL))
+    }
+
+    func fetchDailyOutlook() async -> DailyOutlook? {
+        guard let url = makeURL("/api/daily-outlook") else { return nil }
+        guard let (data, _) = try? await URLSession.shared.data(for: makeGETRequest(url)) else { return nil }
+        return try? JSONDecoder().decode(DailyOutlook.self, from: data)
     }
 
     // MARK: - History API

@@ -12,6 +12,7 @@ import Combine
 final class HistoryViewModel: ObservableObject {
     @Published var baselines: Baselines?      = nil
     @Published var records:   [DailyRecord]   = []
+    @Published var outlook:   DailyOutlook?   = nil
     @Published var isLoading: Bool            = false
     @Published var errorMessage: String?      = nil
     @Published var isEmpty: Bool              = false
@@ -19,7 +20,9 @@ final class HistoryViewModel: ObservableObject {
     private let network = NetworkManager()
 
     func load() async {
-        isLoading    = true
+        if records.isEmpty {
+            isLoading = true
+        }
         errorMessage = nil
         isEmpty      = false
         
@@ -27,15 +30,15 @@ final class HistoryViewModel: ObservableObject {
         
         async let b  = network.fetchBaselines()
         async let r  = network.fetchHistory()
-        let (fetchedBaselines, fetchedRecords) = await (b, r)
+        async let o  = network.fetchDailyOutlook()
+        let (fetchedBaselines, fetchedRecords, fetchedOutlook) = await (b, r, o)
         baselines = fetchedBaselines
         records   = fetchedRecords.reversed()
+        outlook   = fetchedOutlook
 
         if fetchedBaselines == nil && fetchedRecords.isEmpty {
-            // Could not reach server at all
             errorMessage = "Could not reach the server.\nCheck your connection settings."
         } else if fetchedRecords.isEmpty {
-            // Server is reachable but no daily summaries exist yet
             isEmpty = true
         }
         isLoading = false
@@ -129,7 +132,7 @@ struct HistoryView: View {
         )
         .task { await vm.load() }
         .sheet(item: $activeSheet) { sheetType in
-            DetailSheetView(type: sheetType, record: vm.records.first)
+            DetailSheetView(type: sheetType, record: vm.records.first, outlook: vm.outlook)
         }
     }
 }
@@ -246,9 +249,14 @@ struct RangeMetricRow: View {
 // MARK: - WHOOP Rings View
 
 extension DailyRecord {
+    /// Uses backend-persisted recovery_score if available; falls back to HRV z-score proxy
     var computedRecovery: Int {
-        if let hrv = hrv_rmssd {
-            return min(100, max(1, Int((hrv / 80.0) * 100.0)))
+        if let rec = recovery_score, rec > 0 {
+            return min(100, max(1, Int(rec)))
+        }
+        if let hrv = hrv_rmssd, hrv > 0 {
+            // Fallback: simple 20-80ms → 0-100% linear scale
+            return min(100, max(1, Int((hrv - 20.0) / 60.0 * 100.0)))
         }
         return sleep_score
     }
@@ -429,6 +437,7 @@ struct HealthStressCards: View {
 struct DetailSheetView: View {
     let type: DetailSheet
     let record: DailyRecord?
+    let outlook: DailyOutlook?
     @Environment(\.dismiss) var dismiss
 
     var body: some View {
@@ -456,21 +465,59 @@ struct DetailSheetView: View {
                                 sheetRow(title: "Strain", value: String(format: "%.1f", rec.strain))
                                 sheetRow(title: "Activity", value: "Normal")
                             case .health:
-                                sheetRow(title: "Resting HR", value: "\(Int(rec.resting_hr ?? 0)) bpm")
-                                sheetRow(title: "HRV", value: "\(Int(rec.hrv_rmssd ?? 0)) ms")
-                                sheetRow(title: "Respiratory Rate", value: "14.2 rpm")
-                                sheetRow(title: "Blood Oxygen", value: "98%")
-                                sheetRow(title: "Skin Temp", value: "Within Range")
+                                if let rhr = rec.resting_hr { sheetRow(title: "Resting HR", value: "\(Int(rhr)) bpm") } else { sheetRow(title: "Resting HR", value: "--") }
+                                if let hrv = rec.hrv_rmssd { sheetRow(title: "HRV", value: "\(Int(hrv)) ms") } else { sheetRow(title: "HRV", value: "--") }
+                                sheetRow(title: "Respiratory Rate", value: "--")
+                                sheetRow(title: "Blood Oxygen", value: "--")
+                                sheetRow(title: "Skin Temp", value: "--")
                             case .stress:
                                 sheetRow(title: "Current Stress", value: "1.7 (Medium)")
                             case .dailyOutlook:
-                                Text("Your recovery is optimal today. Focus on hitting a strain of at least 14.0 to build fitness.")
-                                    .font(.system(size: 16))
-                                    .foregroundColor(.white.opacity(0.8))
+                                if let outlook = outlook {
+                                    // Real zone indicator
+                                    let zoneColor: Color = {
+                                        switch outlook.zone?.lowercased() {
+                                        case "green":  return .green
+                                        case "yellow": return .yellow
+                                        default:       return .red
+                                        }
+                                    }()
+                                    HStack(spacing: 10) {
+                                        Circle().fill(zoneColor).frame(width: 12, height: 12)
+                                        Text(outlook.zone ?? "--")
+                                            .font(.system(size: 14, weight: .bold))
+                                            .foregroundColor(zoneColor)
+                                        Spacer()
+                                        if let rec = outlook.recovery {
+                                            Text("\(rec)% Recovery")
+                                                .font(.system(size: 13, weight: .semibold))
+                                                .foregroundColor(.white.opacity(0.7))
+                                        }
+                                    }
                                     .padding()
-                                    .frame(maxWidth: .infinity, alignment: .leading)
                                     .background(Color.white.opacity(0.05))
                                     .cornerRadius(12)
+
+                                    if let st = outlook.strain_target {
+                                        sheetRow(title: "Strain Target",
+                                                 value: String(format: "%.0f – %.0f", st.min, st.max))
+                                    }
+
+                                    Text(outlook.advice ?? "No advice available.")
+                                        .font(.system(size: 15))
+                                        .foregroundColor(.white.opacity(0.85))
+                                        .lineSpacing(4)
+                                        .padding()
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                        .background(Color.white.opacity(0.05))
+                                        .cornerRadius(12)
+                                } else {
+                                    Text("Daily Outlook not available yet.\nOpen the app while wearing your band to generate today's analysis.")
+                                        .font(.system(size: 14))
+                                        .foregroundColor(.white.opacity(0.5))
+                                        .multilineTextAlignment(.center)
+                                        .padding()
+                                }
                             }
                         } else {
                             Text("No data available.")
