@@ -68,7 +68,7 @@ struct HistoryView: View {
                 } else if vm.isEmpty {
                     EmptyHistoryView()
                 } else {
-                    if let today = vm.records.first, today.isToday {
+                    if let today = vm.records.first {
                         WhoopRingsView(record: today, onSelect: { activeSheet = $0 })
                         HealthStressCards(onSelect: { activeSheet = $0 })
                         
@@ -111,7 +111,7 @@ struct HistoryView: View {
                         }
                     }
                     
-                    let pastRecords = vm.records.filter { !$0.isToday }
+                    let pastRecords = Array(vm.records.dropFirst())
                     if !pastRecords.isEmpty {
                         DailyHistorySection(records: pastRecords)
                             .padding(.top, 30)
