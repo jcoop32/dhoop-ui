@@ -37,6 +37,9 @@ struct DailyRecord: Decodable, Identifiable {
     let strain: Double
     let resting_hr: Double?
     let hrv_rmssd: Double?
+    let sleep_duration_min: Double?
+    let time_in_bed_min: Double?
+    let disturbances: Int?
     var id: String { date }
 
     var formattedDate: String {

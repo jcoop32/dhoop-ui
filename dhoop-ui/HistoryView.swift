@@ -42,10 +42,18 @@ final class HistoryViewModel: ObservableObject {
     }
 }
 
+// MARK: - Detail Sheet Enum
+
+enum DetailSheet: Identifiable {
+    case sleep, recovery, strain, health, stress, dailyOutlook
+    var id: Int { hashValue }
+}
+
 // MARK: - HistoryView
 
 struct HistoryView: View {
     @StateObject private var vm = HistoryViewModel()
+    @State private var activeSheet: DetailSheet?
 
     var body: some View {
         ScrollView(showsIndicators: false) {
@@ -61,8 +69,8 @@ struct HistoryView: View {
                     EmptyHistoryView()
                 } else {
                     if let today = vm.records.first, today.isToday {
-                        WhoopRingsView(record: today)
-                        HealthStressCards()
+                        WhoopRingsView(record: today, onSelect: { activeSheet = $0 })
+                        HealthStressCards(onSelect: { activeSheet = $0 })
                         
                         VStack(alignment: .leading, spacing: 16) {
                             Text("My Day")
@@ -71,31 +79,34 @@ struct HistoryView: View {
                                 .padding(.horizontal, 20)
                                 .padding(.top, 20)
                             
-                            HStack(spacing: 12) {
-                                ZStack {
-                                    Circle()
-                                        .stroke(Color.white.opacity(0.2), lineWidth: 1)
-                                        .background(Circle().fill(Color.white.opacity(0.05)))
-                                        .frame(width: 44, height: 44)
-                                    Text("d/")
-                                        .font(.system(size: 14, weight: .bold, design: .rounded))
-                                        .foregroundColor(.white)
+                            Button(action: { activeSheet = .dailyOutlook }) {
+                                HStack(spacing: 12) {
+                                    ZStack {
+                                        Circle()
+                                            .stroke(Color.white.opacity(0.2), lineWidth: 1)
+                                            .background(Circle().fill(Color.white.opacity(0.05)))
+                                            .frame(width: 44, height: 44)
+                                        Text("d/")
+                                            .font(.system(size: 14, weight: .bold, design: .rounded))
+                                            .foregroundColor(.white)
+                                    }
+                                    HStack {
+                                        Image(systemName: "sun.haze")
+                                            .foregroundColor(.white.opacity(0.7))
+                                        Text("Daily Outlook")
+                                            .font(.system(size: 14, weight: .semibold))
+                                            .foregroundColor(.white)
+                                        Spacer()
+                                        Image(systemName: "chevron.right")
+                                            .font(.system(size: 12, weight: .semibold))
+                                            .foregroundColor(.white.opacity(0.5))
+                                    }
+                                    .padding()
+                                    .background(Color(white: 0.12))
+                                    .cornerRadius(12)
                                 }
-                                HStack {
-                                    Image(systemName: "sun.haze")
-                                        .foregroundColor(.white.opacity(0.7))
-                                    Text("Daily Outlook")
-                                        .font(.system(size: 14, weight: .semibold))
-                                        .foregroundColor(.white)
-                                    Spacer()
-                                    Image(systemName: "chevron.right")
-                                        .font(.system(size: 12, weight: .semibold))
-                                        .foregroundColor(.white.opacity(0.5))
-                                }
-                                .padding()
-                                .background(Color(white: 0.12))
-                                .cornerRadius(12)
                             }
+                            .buttonStyle(.plain)
                             .padding(.horizontal, 20)
                         }
                     }
@@ -117,6 +128,9 @@ struct HistoryView: View {
             ).ignoresSafeArea()
         )
         .task { await vm.load() }
+        .sheet(item: $activeSheet) { sheetType in
+            DetailSheetView(type: sheetType, record: vm.records.first)
+        }
     }
 }
 
@@ -249,6 +263,7 @@ extension DailyRecord {
 
 struct WhoopRingsView: View {
     let record: DailyRecord
+    let onSelect: (DetailSheet) -> Void
 
     var body: some View {
         VStack(spacing: 30) {
@@ -260,28 +275,34 @@ struct WhoopRingsView: View {
             
             HStack(spacing: 20) {
                 // SLEEP (Cyan)
-                ringView(
-                    title: "SLEEP",
-                    valueText: "\(record.sleep_score)%",
-                    progress: Double(record.sleep_score) / 100.0,
-                    color: Color(red: 0.3, green: 0.7, blue: 0.9)
-                )
+                Button(action: { onSelect(.sleep) }) {
+                    ringView(
+                        title: "SLEEP",
+                        valueText: "\(record.sleep_score)%",
+                        progress: Double(record.sleep_score) / 100.0,
+                        color: Color(red: 0.3, green: 0.7, blue: 0.9)
+                    )
+                }.buttonStyle(.plain)
                 
                 // RECOVERY (Green/Yellow/Red)
-                ringView(
-                    title: "RECOVERY",
-                    valueText: "\(record.computedRecovery)%",
-                    progress: Double(record.computedRecovery) / 100.0,
-                    color: record.recoveryColor
-                )
+                Button(action: { onSelect(.recovery) }) {
+                    ringView(
+                        title: "RECOVERY",
+                        valueText: "\(record.computedRecovery)%",
+                        progress: Double(record.computedRecovery) / 100.0,
+                        color: record.recoveryColor
+                    )
+                }.buttonStyle(.plain)
                 
                 // STRAIN (Blue)
-                ringView(
-                    title: "STRAIN",
-                    valueText: String(format: "%.1f", record.strain),
-                    progress: record.strain / 21.0,
-                    color: Color(red: 0.1, green: 0.5, blue: 0.9)
-                )
+                Button(action: { onSelect(.strain) }) {
+                    ringView(
+                        title: "STRAIN",
+                        valueText: String(format: "%.1f", record.strain),
+                        progress: record.strain / 21.0,
+                        color: Color(red: 0.1, green: 0.5, blue: 0.9)
+                    )
+                }.buttonStyle(.plain)
             }
             .padding(.horizontal, 10)
         }
@@ -318,76 +339,178 @@ struct WhoopRingsView: View {
 // MARK: - Health & Stress Cards
 
 struct HealthStressCards: View {
+    let onSelect: (DetailSheet) -> Void
+
     var body: some View {
         HStack(spacing: 12) {
             // Health Monitor Card
-            VStack(alignment: .leading, spacing: 20) {
-                HStack {
-                    Text("HEALTH\nMONITOR")
-                        .font(.system(size: 12, weight: .bold))
-                        .foregroundColor(.white)
-                    Spacer()
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundColor(.white.opacity(0.5))
-                }
-                
-                HStack(spacing: 8) {
-                    Image(systemName: "checkmark.square.fill")
-                        .font(.system(size: 20))
-                        .foregroundColor(.green)
+            Button(action: { onSelect(.health) }) {
+                VStack(alignment: .leading, spacing: 20) {
+                    HStack {
+                        Text("HEALTH\nMONITOR")
+                            .font(.system(size: 12, weight: .bold))
+                            .foregroundColor(.white)
+                            .multilineTextAlignment(.leading)
+                        Spacer()
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundColor(.white.opacity(0.5))
+                    }
                     
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("WITHIN RANGE")
-                            .font(.system(size: 10, weight: .bold))
+                    HStack(spacing: 8) {
+                        Image(systemName: "checkmark.square.fill")
+                            .font(.system(size: 20))
                             .foregroundColor(.green)
-                        Text("5/5 Metrics")
-                            .font(.system(size: 10))
-                            .foregroundColor(.white.opacity(0.6))
+                        
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("WITHIN RANGE")
+                                .font(.system(size: 10, weight: .bold))
+                                .foregroundColor(.green)
+                            Text("5/5 Metrics")
+                                .font(.system(size: 10))
+                                .foregroundColor(.white.opacity(0.6))
+                        }
                     }
                 }
+                .padding(16)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color(white: 0.15))
+                .cornerRadius(16)
             }
-            .padding(16)
-            .background(Color(white: 0.15))
-            .cornerRadius(16)
+            .buttonStyle(.plain)
             
             // Stress Monitor Card
-            VStack(alignment: .leading, spacing: 20) {
-                HStack {
-                    Text("STRESS\nMONITOR")
-                        .font(.system(size: 12, weight: .bold))
-                        .foregroundColor(.white)
-                    Spacer()
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundColor(.white.opacity(0.5))
-                }
-                
-                HStack(spacing: 8) {
-                    Text("1.7")
-                        .font(.system(size: 12, weight: .bold))
-                        .foregroundColor(.white)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 4)
-                        .background(Color.green)
-                        .cornerRadius(4)
+            Button(action: { onSelect(.stress) }) {
+                VStack(alignment: .leading, spacing: 20) {
+                    HStack {
+                        Text("STRESS\nMONITOR")
+                            .font(.system(size: 12, weight: .bold))
+                            .foregroundColor(.white)
+                            .multilineTextAlignment(.leading)
+                        Spacer()
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundColor(.white.opacity(0.5))
+                    }
                     
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("MEDIUM")
-                            .font(.system(size: 10, weight: .bold))
-                            .foregroundColor(.green)
-                        Text("4:15 PM")
-                            .font(.system(size: 10))
-                            .foregroundColor(.white.opacity(0.6))
+                    HStack(spacing: 8) {
+                        Text("1.7")
+                            .font(.system(size: 12, weight: .bold))
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 4)
+                            .background(Color.green)
+                            .cornerRadius(4)
+                        
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("MEDIUM")
+                                .font(.system(size: 10, weight: .bold))
+                                .foregroundColor(.green)
+                            Text(Date().formatted(.dateTime.hour().minute()))
+                                .font(.system(size: 10))
+                                .foregroundColor(.white.opacity(0.6))
+                        }
                     }
                 }
+                .padding(16)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color(white: 0.15))
+                .cornerRadius(16)
             }
-            .padding(16)
-            .background(Color(white: 0.15))
-            .cornerRadius(16)
+            .buttonStyle(.plain)
         }
         .padding(.horizontal, 20)
         .padding(.top, 30)
+    }
+}
+
+// MARK: - Detail Sheet View
+
+struct DetailSheetView: View {
+    let type: DetailSheet
+    let record: DailyRecord?
+    @Environment(\.dismiss) var dismiss
+
+    var body: some View {
+        NavigationView {
+            ZStack {
+                Color(red: 0.05, green: 0.05, blue: 0.05).ignoresSafeArea()
+                
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 16) {
+                        if let rec = record {
+                            switch type {
+                            case .sleep:
+                                sheetRow(title: "Sleep Score", value: "\(rec.sleep_score)%")
+                                if let dur = rec.sleep_duration_min {
+                                    sheetRow(title: "Duration", value: "\(Int(dur/60))h \(Int(dur.truncatingRemainder(dividingBy: 60)))m")
+                                }
+                                if let inBed = rec.time_in_bed_min {
+                                    sheetRow(title: "Time in Bed", value: "\(Int(inBed/60))h \(Int(inBed.truncatingRemainder(dividingBy: 60)))m")
+                                }
+                            case .recovery:
+                                sheetRow(title: "Recovery", value: "\(rec.computedRecovery)%")
+                                if let hrv = rec.hrv_rmssd { sheetRow(title: "HRV (RMSSD)", value: "\(Int(hrv)) ms") }
+                                if let rhr = rec.resting_hr { sheetRow(title: "Resting HR", value: "\(Int(rhr)) bpm") }
+                            case .strain:
+                                sheetRow(title: "Strain", value: String(format: "%.1f", rec.strain))
+                                sheetRow(title: "Activity", value: "Normal")
+                            case .health:
+                                sheetRow(title: "Resting HR", value: "\(Int(rec.resting_hr ?? 0)) bpm")
+                                sheetRow(title: "HRV", value: "\(Int(rec.hrv_rmssd ?? 0)) ms")
+                                sheetRow(title: "Respiratory Rate", value: "14.2 rpm")
+                                sheetRow(title: "Blood Oxygen", value: "98%")
+                                sheetRow(title: "Skin Temp", value: "Within Range")
+                            case .stress:
+                                sheetRow(title: "Current Stress", value: "1.7 (Medium)")
+                            case .dailyOutlook:
+                                Text("Your recovery is optimal today. Focus on hitting a strain of at least 14.0 to build fitness.")
+                                    .font(.system(size: 16))
+                                    .foregroundColor(.white.opacity(0.8))
+                                    .padding()
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .background(Color.white.opacity(0.05))
+                                    .cornerRadius(12)
+                            }
+                        } else {
+                            Text("No data available.")
+                        }
+                    }
+                    .padding()
+                }
+            }
+            .navigationTitle(titleFor(type))
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Done") { dismiss() }
+                        .foregroundColor(.cyan)
+                }
+            }
+        }
+        .preferredColorScheme(.dark)
+    }
+    
+    func titleFor(_ type: DetailSheet) -> String {
+        switch type {
+        case .sleep: return "Sleep Details"
+        case .recovery: return "Recovery Details"
+        case .strain: return "Strain Details"
+        case .health: return "Health Monitor"
+        case .stress: return "Stress Monitor"
+        case .dailyOutlook: return "Daily Outlook"
+        }
+    }
+    
+    func sheetRow(title: String, value: String) -> some View {
+        HStack {
+            Text(title).foregroundColor(.white.opacity(0.7))
+            Spacer()
+            Text(value).bold().foregroundColor(.white)
+        }
+        .padding()
+        .background(Color.white.opacity(0.05))
+        .cornerRadius(12)
     }
 }
 
