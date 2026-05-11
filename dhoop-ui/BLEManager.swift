@@ -32,7 +32,7 @@ final class FrameReassembler {
     private var buffer: [UInt8] = []
 
     /// Called when a complete frame has been extracted.
-    var onFrame: ((_ hexPayload: String) -> Void)?
+    var onFrame: ((_ frame: [UInt8]) -> Void)?
 
     /// Feed new bytes from a BLE notification chunk.
     func append(_ bytes: [UInt8]) {
@@ -75,9 +75,8 @@ final class FrameReassembler {
             let frame = Array(buffer.prefix(totalFrame))
             buffer.removeFirst(totalFrame)
 
-            // Convert to hex string and fire callback.
-            let hex = frame.map { String(format: "%02X", $0) }.joined()
-            onFrame?(hex)
+            // Fire callback with raw bytes — hex encoding happens only in UI layer.
+            onFrame?(frame)
         }
     }
 
@@ -186,15 +185,8 @@ final class BLEManager: NSObject, ObservableObject {
         centralManager = CBCentralManager(delegate: self, queue: nil)
 
         // Wire up reassembler → ingest pipeline
-        reassembler.onFrame = { [weak self] hexPayload in
+        reassembler.onFrame = { [weak self] frameBytes in
             guard let self else { return }
-
-            // Decode packet type from byte[4] of the hex payload
-            let frameBytes = (0..<(hexPayload.count/2)).compactMap { i -> UInt8? in
-                let s = hexPayload.index(hexPayload.startIndex, offsetBy: i*2)
-                let e = hexPayload.index(s, offsetBy: 2)
-                return UInt8(hexPayload[s..<e], radix: 16)
-            }
 
             let pktType = frameBytes.count > 4 ? frameBytes[4] : 0
 
@@ -225,7 +217,7 @@ final class BLEManager: NSObject, ObservableObject {
 
             // 0x2F = HISTORICAL_DATA — forward to backend exactly like live data
             // 0x2B / 0x28 = live realtime data — forward to backend
-            
+
             // 0x30 = EVENT
             if pktType == 0x30 {
                 let eventType = frameBytes.count > 6 ? frameBytes[6] : 0
@@ -238,7 +230,11 @@ final class BLEManager: NSObject, ObservableObject {
                 }
             }
 
-            self.network.ingest(hexPayload: hexPayload)
+            // Send raw bytes over UDP — no serialization overhead
+            self.network.ingestUDP(bytes: frameBytes)
+
+            // For UI only: convert to hex to display in the packet ring buffer
+            let hexPayload = frameBytes.map { String(format: "%02X", $0) }.joined()
             self.appendLog(.data, "🧩 Frame[0x\(String(format:"%02X",pktType))] → \(hexPayload.prefix(32))…")
 
             DispatchQueue.main.async {
@@ -627,7 +623,8 @@ extension BLEManager: CBPeripheralDelegate {
         case kWhoopEvents:
             let bytes = [UInt8](data)
             appendLog(.data, "EVENT → \(bytes.count)B")
-            reassembler.append(bytes) // Forward to reassembler → backend ingest
+            network.ingestUDP(bytes: bytes)
+            reassembler.append(bytes) // Also forward to reassembler for frame-level callbacks
 
         case kWhoopData:
             // DATA_FROM_STRAP — high-frequency accel + PPG firehose.

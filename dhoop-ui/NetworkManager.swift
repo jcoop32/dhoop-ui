@@ -4,6 +4,7 @@
 //
 
 import Foundation
+import Network
 
 // MARK: - UserDefaults Keys
 enum DhoopDefaults {
@@ -102,6 +103,9 @@ final class NetworkManager {
                           delegateQueue: queue)
     }()
 
+    // MARK: - UDP Transport
+    private var udpConnection: NWConnection?
+
     private let isoFormatter: ISO8601DateFormatter = {
         let f = ISO8601DateFormatter()
         f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
@@ -110,42 +114,25 @@ final class NetworkManager {
 
     // MARK: - Public API
 
-    /// Fire-and-forget POST to /ingest.
-    /// Reads target IP, port, and API key from UserDefaults at call-time so that
-    /// Settings changes take effect on the very next BLE packet — no restart needed.
-    func ingest(hexPayload: String) {
+    /// Fire-and-forget UDP datagram to the edge worker.
+    /// Reads target IP and port from UserDefaults at call-time so Settings changes
+    /// take effect on the very next BLE packet — no restart needed.
+    /// A persistent NWConnection is reused across calls; a new one is created only
+    /// if the connection was never started or was previously cancelled.
+    func ingestUDP(bytes: [UInt8]) {
         let defaults = UserDefaults.standard
-        let ip   = defaults.string(forKey: DhoopDefaults.targetIP)   ?? DhoopDefaults.defaultIP
-        let port = defaults.string(forKey: DhoopDefaults.targetPort) ?? DhoopDefaults.defaultPort
-        let key  = defaults.string(forKey: DhoopDefaults.apiKey)     ?? DhoopDefaults.defaultKey
+        let ip      = defaults.string(forKey: DhoopDefaults.targetIP)   ?? DhoopDefaults.defaultIP
+        let portStr = defaults.string(forKey: DhoopDefaults.targetPort) ?? DhoopDefaults.defaultPort
+        guard let port16 = UInt16(portStr), let port = NWEndpoint.Port(rawValue: port16) else { return }
 
-        guard let url = URL(string: "http://\(ip):\(port)/ingest") else {
-            print("[NetworkManager] Invalid URL — ip=\(ip) port=\(port)")
-            return
+        if udpConnection == nil || udpConnection?.state == .cancelled {
+            let host = NWEndpoint.Host(ip)
+            udpConnection = NWConnection(host: host, port: port, using: .udp)
+            udpConnection?.start(queue: .global(qos: .userInteractive))
         }
 
-        // Build JSON body
-        let body: [String: String] = [
-            "timestamp":   isoFormatter.string(from: Date()),
-            "hex_payload": hexPayload
-        ]
-        guard let jsonData = try? JSONSerialization.data(withJSONObject: body) else { return }
-
-        // Build request
-        var request        = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.httpBody   = jsonData
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue(key,                forHTTPHeaderField: "X-API-Key")
-        request.timeoutInterval = 3  // fail fast; don't queue-back-pressure on rapid BLE updates
-
-        // Fire and forget — completion is intentionally lightweight
-        session.dataTask(with: request) { _, response, error in
-            if let error = error {
-                // Only log transport errors — do NOT surface to UI to avoid flooding
-                print("[NetworkManager] POST failed: \(error.localizedDescription)")
-            }
-        }.resume()
+        let data = Data(bytes)
+        udpConnection?.send(content: data, completion: .contentProcessed({ _ in }))
     }
 
     /// Fire-and-forget POST to /ping to indicate the BLE connection is active.
