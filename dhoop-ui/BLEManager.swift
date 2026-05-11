@@ -246,9 +246,6 @@ final class BLEManager: NSObject, ObservableObject {
         NotificationCenter.default.addObserver(
             self, selector: #selector(appDidBecomeActive),
             name: UIApplication.didBecomeActiveNotification, object: nil)
-        NotificationCenter.default.addObserver(
-            self, selector: #selector(appDidEnterBackground),
-            name: UIApplication.didEnterBackgroundNotification, object: nil)
     }
 
     deinit {
@@ -677,9 +674,6 @@ extension BLEManager {
         sendLiveStreamTrigger()
     }
 
-    @objc private func appDidEnterBackground() {
-        sendBackgroundRecordCommand()
-    }
 
     /// Sends five Gen4 commands in sequence:
     ///   seq=0xA0  cmd=0x1A  payload=[0x00] → GET_BATTERY_LEVEL (+0ms)
@@ -729,13 +723,4 @@ extension BLEManager {
         }
     }
 
-    private func sendBackgroundRecordCommand() {
-        guard let p = whoopPeripheral,
-              let char = cmdCharacteristic,
-              p.state == .connected else { return }
-        // Stop Activity — reverts strap to low-power Record-and-Dump mode
-        let bytes: [UInt8] = [0xAA, 0x01, 0x00, 0x55]
-        p.writeValue(Data(bytes), for: char, type: .withResponse)
-        appendLog(.system, "🔴 Background: sent stop/record command")
-    }
 }

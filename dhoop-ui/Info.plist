@@ -5,6 +5,11 @@
     <key>NSBluetoothAlwaysUsageDescription</key>
     <string>This app uses Bluetooth to connect to your Whoop 4.0 and read sensor data.</string>
 
+    <key>UIBackgroundModes</key>
+    <array>
+        <string>bluetooth-central</string>
+    </array>
+
     <!-- Allow plain HTTP to local ingest server (Tailscale / LAN) -->
     <key>NSAppTransportSecurity</key>
     <dict>
