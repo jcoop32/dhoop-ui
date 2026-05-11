@@ -31,6 +31,24 @@ struct DailyOutlook: Decodable {
     let strain_target: StrainTarget?
 }
 
+struct HealthMonitor: Decodable {
+    let status: String?
+    let resting_hr: Double?
+    let hrv_rmssd: Double?
+    let spo2_pct: Double?
+    let skin_temp_c: Double?
+    let skin_temp_status: String?
+}
+
+struct StressMonitor: Decodable {
+    let status: String?
+    let stress_score: Double?
+    let stress_level: String?
+    let current_hrv: Double?
+    let baseline_hrv: Double?
+    let rr_samples_analyzed: Int?
+}
+
 struct Baselines: Decodable {
     let status: String?
     let hrv_low: Double
@@ -211,6 +229,18 @@ final class NetworkManager {
         guard let url = makeURL("/api/daily-outlook") else { return nil }
         guard let (data, _) = try? await URLSession.shared.data(for: makeGETRequest(url)) else { return nil }
         return try? JSONDecoder().decode(DailyOutlook.self, from: data)
+    }
+
+    func fetchHealthMonitor() async -> HealthMonitor? {
+        guard let url = makeURL("/api/health") else { return nil }
+        guard let (data, _) = try? await URLSession.shared.data(for: makeGETRequest(url)) else { return nil }
+        return try? JSONDecoder().decode(HealthMonitor.self, from: data)
+    }
+
+    func fetchStressMonitor() async -> StressMonitor? {
+        guard let url = makeURL("/api/stress") else { return nil }
+        guard let (data, _) = try? await URLSession.shared.data(for: makeGETRequest(url)) else { return nil }
+        return try? JSONDecoder().decode(StressMonitor.self, from: data)
     }
 
     // MARK: - History API

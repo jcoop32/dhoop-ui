@@ -10,9 +10,11 @@ import Combine
 
 @MainActor
 final class HistoryViewModel: ObservableObject {
-    @Published var baselines: Baselines?      = nil
-    @Published var records:   [DailyRecord]   = []
-    @Published var outlook:   DailyOutlook?   = nil
+    @Published var baselines:     Baselines?     = nil
+    @Published var records:       [DailyRecord]  = []
+    @Published var outlook:       DailyOutlook?  = nil
+    @Published var healthMonitor: HealthMonitor? = nil
+    @Published var stressMonitor: StressMonitor? = nil
     @Published var isLoading: Bool            = false
     @Published var errorMessage: String?      = nil
     @Published var isEmpty: Bool              = false
@@ -31,10 +33,14 @@ final class HistoryViewModel: ObservableObject {
         async let b  = network.fetchBaselines()
         async let r  = network.fetchHistory()
         async let o  = network.fetchDailyOutlook()
-        let (fetchedBaselines, fetchedRecords, fetchedOutlook) = await (b, r, o)
-        baselines = fetchedBaselines
-        records   = fetchedRecords.reversed()
-        outlook   = fetchedOutlook
+        async let h  = network.fetchHealthMonitor()
+        async let s  = network.fetchStressMonitor()
+        let (fetchedBaselines, fetchedRecords, fetchedOutlook, fetchedHealth, fetchedStress) = await (b, r, o, h, s)
+        baselines     = fetchedBaselines
+        records       = fetchedRecords.reversed()
+        outlook       = fetchedOutlook
+        healthMonitor = fetchedHealth
+        stressMonitor = fetchedStress
 
         if fetchedBaselines == nil && fetchedRecords.isEmpty {
             errorMessage = "Could not reach the server.\nCheck your connection settings."
@@ -73,7 +79,11 @@ struct HistoryView: View {
                 } else {
                     if let today = vm.records.first {
                         WhoopRingsView(record: today, onSelect: { activeSheet = $0 })
-                        HealthStressCards(onSelect: { activeSheet = $0 })
+                        HealthStressCards(
+                            health: vm.healthMonitor,
+                            stress: vm.stressMonitor,
+                            onSelect: { activeSheet = $0 }
+                        )
                         
                         VStack(alignment: .leading, spacing: 16) {
                             Text("My Day")
@@ -132,7 +142,13 @@ struct HistoryView: View {
         )
         .task { await vm.load() }
         .sheet(item: $activeSheet) { sheetType in
-            DetailSheetView(type: sheetType, record: vm.records.first, outlook: vm.outlook)
+            DetailSheetView(
+                type: sheetType,
+                record: vm.records.first,
+                outlook: vm.outlook,
+                health: vm.healthMonitor,
+                stress: vm.stressMonitor
+            )
         }
     }
 }
@@ -347,13 +363,42 @@ struct WhoopRingsView: View {
 // MARK: - Health & Stress Cards
 
 struct HealthStressCards: View {
+    let health: HealthMonitor?
+    let stress: StressMonitor?
     let onSelect: (DetailSheet) -> Void
+
+    private var spo2Text: String {
+        if let s = health?.spo2_pct { return String(format: "%.1f%%", s) }
+        return "--"
+    }
+
+    private var healthStatusText: String {
+        if health == nil { return "--" }
+        return health?.spo2_pct != nil ? "Data Available" : "Sensors Warming"
+    }
+
+    private var stressScore: String {
+        if let s = stress?.stress_score { return String(format: "%.1f", s) }
+        return "--"
+    }
+
+    private var stressLevel: String { stress?.stress_level ?? "--" }
+
+    private var stressColor: Color {
+        switch stress?.stress_level {
+        case "Recovered": return Color(red: 0.2, green: 0.9, blue: 0.5)
+        case "Low":       return .green
+        case "Medium":    return .yellow
+        case "High":      return Color(red: 1, green: 0.35, blue: 0.2)
+        default:          return .gray
+        }
+    }
 
     var body: some View {
         HStack(spacing: 12) {
             // Health Monitor Card
             Button(action: { onSelect(.health) }) {
-                VStack(alignment: .leading, spacing: 20) {
+                VStack(alignment: .leading, spacing: 16) {
                     HStack {
                         Text("HEALTH\nMONITOR")
                             .font(.system(size: 12, weight: .bold))
@@ -364,19 +409,32 @@ struct HealthStressCards: View {
                             .font(.system(size: 12, weight: .semibold))
                             .foregroundColor(.white.opacity(0.5))
                     }
-                    
+
+                    // SpO2 preview
                     HStack(spacing: 8) {
-                        Image(systemName: "checkmark.square.fill")
-                            .font(.system(size: 20))
-                            .foregroundColor(.green)
-                        
+                        Image(systemName: "lungs.fill")
+                            .font(.system(size: 18))
+                            .foregroundColor(.cyan)
                         VStack(alignment: .leading, spacing: 2) {
-                            Text("WITHIN RANGE")
-                                .font(.system(size: 10, weight: .bold))
-                                .foregroundColor(.green)
-                            Text("5/5 Metrics")
-                                .font(.system(size: 10))
-                                .foregroundColor(.white.opacity(0.6))
+                            Text("SpO2")
+                                .font(.system(size: 9, weight: .bold))
+                                .foregroundColor(.white.opacity(0.4))
+                                .tracking(1)
+                            Text(spo2Text)
+                                .font(.system(size: 18, weight: .bold, design: .rounded))
+                                .foregroundColor(.white)
+                        }
+                        Spacer()
+                        if let temp = health?.skin_temp_c {
+                            VStack(alignment: .trailing, spacing: 2) {
+                                Text("SKIN TEMP")
+                                    .font(.system(size: 9, weight: .bold))
+                                    .foregroundColor(.white.opacity(0.4))
+                                    .tracking(1)
+                                Text(String(format: "%.1f°C", temp))
+                                    .font(.system(size: 14, weight: .semibold, design: .rounded))
+                                    .foregroundColor(.white)
+                            }
                         }
                     }
                 }
@@ -386,10 +444,10 @@ struct HealthStressCards: View {
                 .cornerRadius(16)
             }
             .buttonStyle(.plain)
-            
+
             // Stress Monitor Card
             Button(action: { onSelect(.stress) }) {
-                VStack(alignment: .leading, spacing: 20) {
+                VStack(alignment: .leading, spacing: 16) {
                     HStack {
                         Text("STRESS\nMONITOR")
                             .font(.system(size: 12, weight: .bold))
@@ -400,23 +458,29 @@ struct HealthStressCards: View {
                             .font(.system(size: 12, weight: .semibold))
                             .foregroundColor(.white.opacity(0.5))
                     }
-                    
+
                     HStack(spacing: 8) {
-                        Text("1.7")
-                            .font(.system(size: 12, weight: .bold))
+                        Text(stressScore)
+                            .font(.system(size: 14, weight: .bold))
                             .foregroundColor(.white)
-                            .padding(.horizontal, 6)
+                            .padding(.horizontal, 7)
                             .padding(.vertical, 4)
-                            .background(Color.green)
-                            .cornerRadius(4)
-                        
+                            .background(stressColor)
+                            .cornerRadius(5)
+
                         VStack(alignment: .leading, spacing: 2) {
-                            Text("MEDIUM")
+                            Text(stressLevel.uppercased())
                                 .font(.system(size: 10, weight: .bold))
-                                .foregroundColor(.green)
-                            Text(Date().formatted(.dateTime.hour().minute()))
-                                .font(.system(size: 10))
-                                .foregroundColor(.white.opacity(0.6))
+                                .foregroundColor(stressColor)
+                            if let hrv = stress?.current_hrv {
+                                Text("HRV \(Int(hrv))ms")
+                                    .font(.system(size: 10))
+                                    .foregroundColor(.white.opacity(0.5))
+                            } else {
+                                Text(Date().formatted(.dateTime.hour().minute()))
+                                    .font(.system(size: 10))
+                                    .foregroundColor(.white.opacity(0.5))
+                            }
                         }
                     }
                 }
@@ -438,6 +502,8 @@ struct DetailSheetView: View {
     let type: DetailSheet
     let record: DailyRecord?
     let outlook: DailyOutlook?
+    var health: HealthMonitor? = nil
+    var stress: StressMonitor? = nil
     @Environment(\.dismiss) var dismiss
 
     var body: some View {
@@ -465,13 +531,46 @@ struct DetailSheetView: View {
                                 sheetRow(title: "Strain", value: String(format: "%.1f", rec.strain))
                                 sheetRow(title: "Activity", value: "Normal")
                             case .health:
-                                if let rhr = rec.resting_hr { sheetRow(title: "Resting HR", value: "\(Int(rhr)) bpm") } else { sheetRow(title: "Resting HR", value: "--") }
-                                if let hrv = rec.hrv_rmssd { sheetRow(title: "HRV", value: "\(Int(hrv)) ms") } else { sheetRow(title: "HRV", value: "--") }
-                                sheetRow(title: "Respiratory Rate", value: "--")
-                                sheetRow(title: "Blood Oxygen", value: "--")
-                                sheetRow(title: "Skin Temp", value: "--")
+                                // Real data from /api/health
+                                let h = health
+                                if let rhr = h?.resting_hr { sheetRow(title: "Resting HR", value: "\(Int(rhr)) bpm") }
+                                else if let rhr = rec.resting_hr { sheetRow(title: "Resting HR", value: "\(Int(rhr)) bpm") }
+                                else { sheetRow(title: "Resting HR", value: "--") }
+
+                                if let hrv = h?.hrv_rmssd { sheetRow(title: "HRV (RMSSD)", value: "\(Int(hrv)) ms") }
+                                else if let hrv = rec.hrv_rmssd { sheetRow(title: "HRV (RMSSD)", value: "\(Int(hrv)) ms") }
+                                else { sheetRow(title: "HRV (RMSSD)", value: "--") }
+
+                                sheetRow(title: "Respiratory Rate", value: "--")  // needs dedicated RR endpoint
+
+                                if let spo2 = h?.spo2_pct {
+                                    sheetRow(title: "Blood Oxygen (SpO2)", value: String(format: "%.1f%%", spo2))
+                                } else {
+                                    sheetRow(title: "Blood Oxygen (SpO2)", value: "--")
+                                }
+
+                                if let temp = h?.skin_temp_c, let status = h?.skin_temp_status {
+                                    sheetRow(title: "Skin Temp", value: String(format: "%.1f°C — %@", temp, status))
+                                } else {
+                                    sheetRow(title: "Skin Temp", value: "--")
+                                }
                             case .stress:
-                                sheetRow(title: "Current Stress", value: "1.7 (Medium)")
+                                // Real data from /api/stress
+                                let s = stress
+                                if let score = s?.stress_score, let level = s?.stress_level {
+                                    sheetRow(title: "Stress Level", value: String(format: "%.1f — %@", score, level))
+                                } else {
+                                    sheetRow(title: "Stress Level", value: "-- (Insufficient RR data)")
+                                }
+                                if let curHRV = s?.current_hrv {
+                                    sheetRow(title: "Current HRV (15-min)", value: "\(Int(curHRV)) ms")
+                                }
+                                if let baseHRV = s?.baseline_hrv {
+                                    sheetRow(title: "Overnight Baseline HRV", value: "\(Int(baseHRV)) ms")
+                                }
+                                if let samples = s?.rr_samples_analyzed {
+                                    sheetRow(title: "RR Samples Analyzed", value: "\(samples)")
+                                }
                             case .dailyOutlook:
                                 if let outlook = outlook {
                                     // Real zone indicator
