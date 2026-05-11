@@ -302,7 +302,7 @@ struct ContentView: View {
                 }
                 .padding(.horizontal, 12).padding(.vertical, 10)
             }
-            .onChange(of: ble.logEntries.count) { _ in
+            .onChange(of: ble.logEntries.count) {
                 if let last = ble.logEntries.last {
                     withAnimation { proxy.scrollTo(last.id, anchor: .bottom) }
                 }
@@ -325,7 +325,7 @@ struct ContentView: View {
                 }
                 .padding(.horizontal, 12).padding(.vertical, 10)
             }
-            .onChange(of: ble.sensorPackets.count) { _ in
+            .onChange(of: ble.sensorPackets.count) {
                 if let last = ble.sensorPackets.last {
                     withAnimation { proxy.scrollTo(last.id, anchor: .bottom) }
                 }

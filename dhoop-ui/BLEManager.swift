@@ -485,10 +485,12 @@ extension BLEManager: CBCentralManagerDelegate {
         // Start ping timer to indicate active connection + poll backend HR
         pingTimer?.invalidate()
         pingTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
-            self?.network.sendPing()
+            guard let self else { return }
+            self.network.sendPing()
             Task { [weak self] in
-                let latestHR = await self?.network.fetchLatestHR()
-                await MainActor.run { self?.backendHR = latestHR }
+                guard let self else { return }
+                let latestHR = await self.network.fetchLatestHR()
+                await MainActor.run { [weak self] in self?.backendHR = latestHR }
             }
         }
 
@@ -705,18 +707,18 @@ extension BLEManager {
         send(cmd: 0x1A, payload: [0x00])
 
         // Cmd 1: Toggle HR
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
-            guard let self, p.state == .connected else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+            guard p.state == .connected else { return }
             send(cmd: 0x03, payload: [0x01])
         }
         // Cmd 2: Send R10 IMU
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
-            guard let self, p.state == .connected else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+            guard p.state == .connected else { return }
             send(cmd: 0x3F, payload: [0x01])
         }
         // Cmd 3: ENABLE_OPTICAL_DATA (0x6B=107) — activates optical sensor streaming
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) { [weak self] in
-            guard let self, p.state == .connected else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) {
+            guard p.state == .connected else { return }
             send(cmd: 0x6B, payload: [0x01])
         }
         // Cmd 4: SpO2 enable
