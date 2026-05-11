@@ -246,6 +246,9 @@ final class BLEManager: NSObject, ObservableObject {
         NotificationCenter.default.addObserver(
             self, selector: #selector(appDidBecomeActive),
             name: UIApplication.didBecomeActiveNotification, object: nil)
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(appDidEnterBackground),
+            name: UIApplication.didEnterBackgroundNotification, object: nil)
     }
 
     deinit {
@@ -672,6 +675,24 @@ extension BLEManager {
 
     @objc private func appDidBecomeActive() {
         sendLiveStreamTrigger()
+    }
+
+    /// Pauses the high-bandwidth IMU and optical streams when the app backgrounds.
+    /// HR (cmd 0x03) is intentionally left running so the pipeline stays warm.
+    /// sendLiveStreamTrigger() re-arms everything on foreground resume.
+    @objc private func appDidEnterBackground() {
+        guard let p = whoopPeripheral, let char = cmdCharacteristic,
+              p.state == .connected else { return }
+
+        var seq: UInt8 = 0xB0
+        func send(cmd: UInt8, payload: [UInt8]) {
+            p.writeValue(buildPacket(seq: seq, cmd: cmd, payload: payload), for: char, type: .withResponse)
+            seq &+= 1
+        }
+        send(cmd: 0x3F, payload: [0x00])  // IMU off  (R10 firehose)
+        send(cmd: 0x6B, payload: [0x00])  // Optical off
+        send(cmd: 0x6C, payload: [0x00])  // SpO2 mode off
+        appendLog(.system, "🌙 Background: IMU + optical paused, HR stream active")
     }
 
 
